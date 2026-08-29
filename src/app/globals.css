@@ -1,26 +1,115 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-sans);
   --font-mono: var(--font-geist-mono);
+  --color-border: var(--border);
+  --color-card: var(--card);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+:root, .dark {
+  --background: #09090b;
+  --foreground: #f4f4f5;
+  --card: #121216;
+  --border: rgba(255, 255, 255, 0.1);
+}
+
+@layer base {
+  body {
+    background-color: #08080a;
+    color: #f4f4f5;
+    overflow-x: hidden;
+    font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Cyber Stage HUD Brackets */
+.hud-bracket-tl {
+  border-top: 2px solid;
+  border-left: 2px solid;
+}
+.hud-bracket-tr {
+  border-top: 2px solid;
+  border-right: 2px solid;
+}
+.hud-bracket-bl {
+  border-bottom: 2px solid;
+  border-left: 2px solid;
+}
+.hud-bracket-br {
+  border-bottom: 2px solid;
+  border-right: 2px solid;
+}
+
+/* 3D Perspective utilities */
+.perspective-1000 {
+  perspective: 1000px;
+}
+.perspective-1500 {
+  perspective: 1500px;
+}
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+.backface-hidden {
+  backface-visibility: hidden;
+}
+
+/* Hologram scanline & grid effects */
+.holo-scanline {
+  background: linear-gradient(
+    to bottom,
+    transparent 50%,
+    rgba(0, 0, 0, 0.4) 51%
+  );
+  background-size: 100% 4px;
+}
+
+.holo-beam {
+  background: radial-gradient(
+    ellipse at 50% 100%,
+    var(--glow-color, rgba(245, 158, 11, 0.35)) 0%,
+    rgba(0, 0, 0, 0) 70%
+  );
+}
+
+.hud-grid-dots {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Floating animation */
+@keyframes cyber-float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(0.5deg);
+  }
+}
+
+.animate-cyber-float {
+  animation: cyber-float 6s ease-in-out infinite;
+}
+
+/* Glow pulse */
+@keyframes neon-pulse {
+  0%, 100% {
+    opacity: 0.8;
+    filter: drop-shadow(0 0 15px currentColor);
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 30px currentColor);
+  }
+}
+
+.animate-neon-pulse {
+  animation: neon-pulse 3s ease-in-out infinite;
 }

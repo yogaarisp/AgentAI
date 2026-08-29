@@ -1,0 +1,45 @@
+PRD: Frontend Multi-Agent AI Dashboard
+
+Project Name: Multi-Agent Dashboard (Hermes Agent)
+
+Tujuan Utama:
+Membuat frontend yang tampilannya modern, clean, dan powerful sebagai dashboard pengendali untuk sistem multi-agent AI. Backend tetap menggunakan Kirana (Hermes), sementara frontend akan menampilkan semua agent secara jelas dan bisa langsung di-eksekusi.
+
+Scope Utama:
+- Tampilan dashboard yang modern dan vibe AI agency
+- Daftar agent AI dengan nama, tugas, dan status
+- Tombol klik untuk eksekusi tugas agent
+- Tampilan real-time status agent
+- Backend tetap menggunakan Kirana (Hermes)
+
+Agent yang akan dibuat (4 agent):
+1. Keemes (CEO)
+2. Keedev (Developer Agent)
+3. Keeinfra (Infrastructure Agent)
+4. Keefin (Finance Agent)
+
+
+Buatkan Next.js 15 (App Router + TypeScript + Tailwind CSS + shadcn/ui) frontend dashboard yang modern dan powerful.
+
+Tampilan utama harus mirip vibe AI agency dashboard yang cyber, minimalis, gelap, dan elegan.
+
+Fitur yang harus ada:
+- Header dengan logo "Hermes Agent" + status "Multi-Agent System"
+- Sidebar navigation (Dashboard, Agents, Logs, Settings)
+- Main area berisi grid card agent dengan 4 agent:
+  - Keemes (CEO )
+  - Keede v (Developer Agent)
+  - Keeinfra (Infrastructure Agent)
+
+Setiap agent card harus menampilkan:
+- Nama agent (bold, besar)
+- Tugas / role (contoh: "CEO", "Developer AI", "Infrastructure Management")
+- Status (Active / Standby / Running) dengan badge warna berbeda
+- Tombol besar "Execute" atau "Start" yang bisa diklik
+- Avatar atau icon unik untuk setiap agent
+
+Gunakan shadcn/ui component yang sudah ada (card, button, badge, progress, dll).
+
+Buat UI yang clean, modern, professional, dan vibe-nya pas dengan AI agency dashboard. Buat full working project dengan folder structure yang rapi.
+
+Jadikan tampilan yang sangat menarik dan profesional.
