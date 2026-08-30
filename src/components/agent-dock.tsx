@@ -14,7 +14,7 @@ export default function AgentDock({ agents, activeAgent, onSelect }: Props) {
     <div className="w-full max-w-5xl mx-auto flex flex-col items-center py-6 px-4">
       {/* Subtitle tag above selector */}
       <p className="text-[11px] font-mono tracking-[0.25em] text-zinc-500 uppercase mb-4 text-center">
-        ONE OPERATOR • FOUR SPECIALISTS • BUILT ON KIRANA HERMES
+        ONE OPERATOR • FOUR SPECIALISTS • BUILT ON KEETECH
       </p>
 
       {/* Thumbnails Row */}

@@ -17,8 +17,9 @@ interface GatewayFrame {
 async function runHermesTask(
   profile: string,
   task: string,
+  existingSessionId?: string,
   timeoutMs = 180_000
-): Promise<{ output: string; events: string[] }> {
+): Promise<{ output: string; events: string[]; sessionId: string }> {
   const session = await getHermesSession();
   const ticket = await getWsTicket();
   const baseUrl = process.env.HERMES_BASE_URL || "https://hermes.keetech.my.id";
@@ -67,6 +68,7 @@ async function runHermesTask(
         return;
       }
       const type = frame.params?.type || frame.method?.replace(/^gateway\./, "");
+      const sanitize = (s: string) => s.replace(/[\u0000-\u001f\u007f]/g, " ");
       if (type === "message.delta" && frame.params?.payload?.text) {
         output += frame.params.payload.text;
       } else if (type === "message.complete") {
@@ -74,10 +76,14 @@ async function runHermesTask(
         if (text) output = text;
       } else if (type && ["tool.start", "tool.complete", "status.update", "thinking.delta"].includes(type)) {
         if (events.length < 50) {
-          events.push(`[${type}] ${JSON.stringify(frame.params?.payload ?? {}).slice(0, 120)}`);
+          events.push(
+            sanitize(`[${type}] ${JSON.stringify(frame.params?.payload ?? {})}`).slice(0, 160)
+          );
         }
       } else if (type === "error" || type === "approval.request" || type === "clarify.request") {
-        events.push(`[${type}] ${JSON.stringify(frame.params?.payload ?? {}).slice(0, 200)}`);
+        events.push(
+          sanitize(`[${type}] ${JSON.stringify(frame.params?.payload ?? {})}`).slice(0, 240)
+        );
       }
     });
 
@@ -96,15 +102,19 @@ async function runHermesTask(
       });
     };
 
-    const created = await rpc<{ session_id: string }>(
-      "session.create",
-      { profile, title: `Dashboard: ${task.slice(0, 60)}` },
-      30_000
-    );
-    sessionId = created.session_id;
-    if (!sessionId) throw new Error("session.create tidak mengembalikan session_id");
-
-    events.push(`[session] ${sessionId} (profile: ${profile})`);
+    if (existingSessionId) {
+      sessionId = existingSessionId;
+      events.push(`[session] lanjut sesi ${sessionId} (profile: ${profile})`);
+    } else {
+      const created = await rpc<{ session_id: string }>(
+        "session.create",
+        { profile, title: `Dashboard: ${task.slice(0, 60)}` },
+        30_000
+      );
+      sessionId = created.session_id;
+      if (!sessionId) throw new Error("session.create tidak mengembalikan session_id");
+      events.push(`[session] ${sessionId} (profile: ${profile})`);
+    }
 
     await rpc("prompt.submit", { session_id: sessionId, text: task }, timeoutMs);
 
@@ -117,7 +127,7 @@ async function runHermesTask(
       throw new Error("Tidak ada output dari Hermes sebelum timeout");
     }
 
-    return { output, events };
+    return { output, events, sessionId };
   } finally {
     cleanup();
   }
@@ -126,12 +136,12 @@ async function runHermesTask(
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { agentId, profile = process.env.HERMES_DEFAULT_PROFILE || "devbot", task = "Default execution task" } = body;
+    const { agentId, profile = process.env.HERMES_DEFAULT_PROFILE || "devbot", task = "Default execution task", sessionId } = body;
 
     const baseUrl = process.env.HERMES_BASE_URL || "https://hermes.keetech.my.id";
 
     try {
-      const { output, events } = await runHermesTask(profile, task);
+      const { output, events, sessionId: usedSessionId } = await runHermesTask(profile, task, sessionId);
 
       return NextResponse.json({
         success: true,
@@ -141,6 +151,7 @@ export async function POST(req: NextRequest) {
         task,
         timestamp: new Date().toISOString(),
         executionId: `exec_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+        sessionId: usedSessionId,
         mode: "hermes_live_bridge",
         response: {
           output,

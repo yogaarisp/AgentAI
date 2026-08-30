@@ -12,6 +12,7 @@ export default function Home() {
   const [viewMode, setViewMode] = useState<"spotlight" | "roster">("spotlight");
   const [executingAgent, setExecutingAgent] = useState<Agent | null>(null);
   const [liveRunning, setLiveRunning] = useState<Record<string, boolean>>({});
+  const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -19,15 +20,19 @@ export default function Home() {
       try {
         const res = await fetch("/api/hermes/status", { cache: "no-store" });
         const data = await res.json();
-        if (!cancelled && data.success) {
+        if (cancelled) return;
+        if (data.success) {
+          setBackendOnline(true);
           const map: Record<string, boolean> = {};
           for (const [name, info] of Object.entries(data.profiles)) {
             map[name] = Boolean((info as { gateway_running?: boolean }).gateway_running);
           }
           setLiveRunning(map);
+        } else {
+          setBackendOnline(false);
         }
       } catch {
-        /* keep last known status */
+        if (!cancelled) setBackendOnline(false);
       }
     };
     load();
@@ -41,11 +46,14 @@ export default function Home() {
   const liveAgents: Agent[] = useMemo(
     () =>
       agents.map((a) => {
+        if (backendOnline === false) {
+          return { ...a, status: "offline" as AgentStatus };
+        }
         const running = liveRunning[a.hermesProfileKey];
         const status: AgentStatus = running === false ? "offline" : a.status;
         return { ...a, status };
       }),
-    [liveRunning]
+    [liveRunning, backendOnline]
   );
 
   const activeAgent = liveAgents[activeAgentIndex];
@@ -132,8 +140,22 @@ export default function Home() {
 
           {/* Core Status */}
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs font-mono text-zinc-300">
-            <span className="size-2 rounded-full bg-emerald-400" />
-            <span>KEETECH INTELEGENT</span>
+            <span
+              className={`size-2 rounded-full ${
+                backendOnline === false
+                  ? "bg-red-500"
+                  : backendOnline === null
+                    ? "bg-amber-400 animate-pulse"
+                    : "bg-emerald-400"
+              }`}
+            />
+            <span>
+              {backendOnline === false
+                ? "BACKEND OFFLINE"
+                : backendOnline === null
+                  ? "CONNECTING…"
+                  : "KEETECH INTELEGENT"}
+            </span>
           </div>
         </div>
       </header>
