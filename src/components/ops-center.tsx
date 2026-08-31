@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import type { Agent } from "@/lib/agents";
-import { speak, stopSpeaking } from "@/lib/tts";
+import { playJarvisChime, speak, stopSpeaking } from "@/lib/tts";
 
 const ttsStore = {
   listeners: new Set<() => void>(),
@@ -285,7 +285,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     const tryIntro = () => {
       if (introSpokenRef.current) return;
       introSpokenRef.current = true;
-      speak();
+      speak("Hai Keenan. My name is Jarvis.");
     };
     const t = setTimeout(tryIntro, 500);
     const onGesture = () => tryIntro();
@@ -421,8 +421,8 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     }
   };
 
-  const sendMessage = async () => {
-    const text = input.trim();
+  const sendMessage = async (overrideText?: string) => {
+    const text = (typeof overrideText === "string" ? overrideText : input).trim();
     if (!text || isThinking || !keemes) return;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -440,6 +440,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         ];
         streamIndexRef.current = 0;
         setStreamingStarted(true);
+        if (ttsOnRef.current) playJarvisChime();
       } else {
         const m = feedRef.current[streamIndexRef.current];
         feedRef.current[streamIndexRef.current] = { ...m, text: m.text + t };
@@ -454,7 +455,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         feedRef.current[streamIndexRef.current] = { ...feedRef.current[streamIndexRef.current], text: t };
         setFeed([...feedRef.current]);
       }
-      if (ttsOnRef.current) speak();
+      if (ttsOnRef.current) speak(t);
     };
 
     try {
@@ -544,7 +545,9 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     rec.onend = () => setListening(false);
     rec.onresult = (e: any) => {
       const t = e.results[0][0].transcript;
-      setInput((prev: string) => (prev ? prev + " " : "") + t);
+      setInput("");
+      // Auto-send: langsung kirim hasil suara tanpa perlu Enter.
+      void sendMessage(t);
     };
     rec.start();
   };
@@ -678,7 +681,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
             className="flex-1 bg-transparent text-xs font-mono text-white placeholder-zinc-600 focus:outline-none disabled:opacity-50"
           />
           <button
-            onClick={isThinking ? () => abortRef.current?.abort() : sendMessage}
+            onClick={isThinking ? () => abortRef.current?.abort() : () => sendMessage()}
             disabled={(!isThinking && !input.trim()) || hasPending}
             className={`px-4 py-1.5 rounded-lg text-[11px] font-mono font-bold transition-all disabled:opacity-40 ${isThinking ? "bg-red-500 text-white" : "bg-amber-500/80 text-black hover:bg-amber-400"}`}
           >

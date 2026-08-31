@@ -255,16 +255,18 @@ export async function POST(req: NextRequest) {
       const agentMeta = agents.find((a) => a.id === agentId);
       const modelSettings = loadModelSettings();
 
-      const runWithHermes = async () => {
+      const runWithHermes = async (profileOverride?: string) => {
+        const useProfile = profileOverride || profile;
+        const runOpts = useProfile === profile ? opts : { ...opts, profile: useProfile };
         let result;
         try {
-          result = await runHermesTask(opts);
+          result = await runHermesTask(runOpts);
         } catch (err: any) {
           const msg = err?.message || "";
           if (/HTTP 401/.test(msg)) {
             clearHermesSession();
             send("event", { type: "info", text: "Login Hermes kedaluwarsa — login ulang otomatis..." });
-            result = await runHermesTask(opts);
+            result = await runHermesTask(runOpts);
           } else if (/Rate limit login Hermes/.test(msg)) {
             send("event", { type: "info", text: "Hermes sedang rate-limit login — tunggu ±1 menit lalu kirim ulang pesanmu." });
             throw err;
@@ -275,7 +277,8 @@ export async function POST(req: NextRequest) {
         return result;
       };
 
-      // Rantai eksekusi: primary LLM → fallback per-agent → Hermes gateway.
+      // Rantai eksekusi: primary LLM → fallback per-agent (jika diisi) → Hermes gateway
+      // dengan profil agent masing-masing sesuai setup server Hermes.
       const chain: { label: string; run: () => Promise<{ text: string; sessionId?: string; events?: string[] }> }[] = [];
       if (modelSettings.primary.apiKey) {
         chain.push({
@@ -302,10 +305,13 @@ export async function POST(req: NextRequest) {
             }),
         });
       }
+      // Fallback per-agent: profil Hermes milik agent itu sendiri
+      // (keemes→keehermes, kirana→kirana, keedev→keedev, dst).
+      const agentHermesProfile = agentMeta?.hermesProfileKey || profile;
       chain.push({
-        label: "hermes",
+        label: `hermes:${agentHermesProfile}`,
         run: async () => {
-          const r = await runWithHermes();
+          const r = await runWithHermes(agentHermesProfile);
           return { text: r.output, sessionId: r.sessionId, events: r.events };
         },
       });

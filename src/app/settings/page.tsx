@@ -216,8 +216,10 @@ export default function SettingsPage() {
           <p className="text-[10px] font-mono font-bold tracking-[0.2em] text-amber-400">URUTAN EKSEKUSI</p>
           <p className="mt-2 text-[11px] font-mono leading-relaxed text-zinc-400">
             1. <span className="text-white">PRIMARY</span> (Gemini / AI Studio key) → jika gagal{" "}
-            <span className="text-white">2. FALLBACK PER-AGENT</span> (jika diisi) → jika gagal{" "}
-            <span className="text-white">3. HERMES GATEWAY</span> (server Hermes, sebagai jaring pengaman).
+            <span className="text-white">2. FALLBACK PER-AGENT</span>: Hermes gateway dengan{" "}
+            <span className="text-white">profil agent masing-masing</span> sesuai setup server Hermes
+            (keemes→keehermes, kirana→kirana, keedev→keedev, dst). Key custom di bawah hanya opsional
+            bila ingin fallback ke LLM lain sebelum Hermes.
           </p>
         </div>
 
