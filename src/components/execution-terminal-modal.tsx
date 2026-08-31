@@ -230,7 +230,20 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
             setStreamFinal(payload.output || "...");
             pushMessages([]);
           } else if (event === "error") {
-            pushMessages([{ role: "event", text: `ERROR: ${payload.message}` }]);
+            const msg = String(payload.message || "");
+            if (/session not found/i.test(msg)) {
+              sessionIdRef.current = null;
+              try {
+                window.localStorage.removeItem(storageKeys(agent.id).sid);
+              } catch {
+                /* noop */
+              }
+              pushMessages([
+                { role: "event", text: "Sesi lama sudah tidak ada di gateway — sesi baru dibuat. Kirim ulang pesanmu." },
+              ]);
+            } else {
+              pushMessages([{ role: "event", text: `ERROR: ${msg}` }]);
+            }
             saveChat(agent.id, sessionIdRef.current, messagesRef.current);
           }
         }

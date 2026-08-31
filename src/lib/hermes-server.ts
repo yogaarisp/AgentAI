@@ -5,11 +5,13 @@ interface HermesSession {
 
 let cachedSession: HermesSession | null = null;
 
-export async function getHermesSession(): Promise<HermesSession> {
-  if (cachedSession && cachedSession.expiresAt > Date.now() + 60_000) {
-    return cachedSession;
-  }
+export function clearHermesSession() {
+  cachedSession = null;
+}
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function loginHermes(): Promise<HermesSession> {
   const baseUrl = process.env.HERMES_BASE_URL || "https://hermes.keetech.my.id";
   const username = process.env.HERMES_USERNAME;
   const password = process.env.HERMES_PASSWORD;
@@ -18,27 +20,39 @@ export async function getHermesSession(): Promise<HermesSession> {
     throw new Error("HERMES_USERNAME / HERMES_PASSWORD belum dikonfigurasi di .env.local");
   }
 
-  const res = await fetch(`${baseUrl}/auth/password-login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: "basic", username, password, next: "" }),
-  });
+  let lastErr: Error = new Error("Login Hermes gagal");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await sleep(1500);
+    const res = await fetch(`${baseUrl}/auth/password-login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "basic", username, password, next: "" }),
+    });
 
-  if (!res.ok) {
-    throw new Error(`Login Hermes gagal (HTTP ${res.status})`);
+    if (res.ok) {
+      const rawCookies = res.headers.getSetCookie?.() ?? [];
+      const pairs = rawCookies.map((c) => c.split(";")[0]).filter((p) => p.includes("="));
+
+      if (pairs.length === 0) {
+        throw new Error("Login Hermes tidak mengembalikan cookie sesi");
+      }
+
+      return {
+        cookie: pairs.join("; "),
+        expiresAt: Date.now() + 11 * 3600_000,
+      };
+    }
+
+    lastErr = new Error(`Login Hermes gagal (HTTP ${res.status})`);
   }
+  throw lastErr;
+}
 
-  const rawCookies = res.headers.getSetCookie?.() ?? [];
-  const pairs = rawCookies.map((c) => c.split(";")[0]).filter((p) => p.includes("="));
-
-  if (pairs.length === 0) {
-    throw new Error("Login Hermes tidak mengembalikan cookie sesi");
+export async function getHermesSession(force = false): Promise<HermesSession> {
+  if (!force && cachedSession && cachedSession.expiresAt > Date.now() + 60_000) {
+    return cachedSession;
   }
-
-  cachedSession = {
-    cookie: pairs.join("; "),
-    expiresAt: Date.now() + 11 * 3600_000,
-  };
+  cachedSession = await loginHermes();
   return cachedSession;
 }
 
@@ -56,17 +70,23 @@ export async function getProfileStatuses(): Promise<ProfileStatus[]> {
     return statusCache.data;
   }
 
-  const session = await getHermesSession();
   const baseUrl = process.env.HERMES_BASE_URL || "https://hermes.keetech.my.id";
-  const res = await fetch(`${baseUrl}/api/profiles`, {
+
+  let session = await getHermesSession();
+  let res = await fetch(`${baseUrl}/api/profiles`, {
     headers: { Cookie: session.cookie },
     cache: "no-store",
   });
 
   if (res.status === 401) {
     cachedSession = null;
-    throw new Error("Sesi Hermes kedaluwarsa, coba lagi");
+    session = await getHermesSession(true);
+    res = await fetch(`${baseUrl}/api/profiles`, {
+      headers: { Cookie: session.cookie },
+      cache: "no-store",
+    });
   }
+
   if (!res.ok) {
     throw new Error(`Gagal mengambil status profil (HTTP ${res.status})`);
   }
@@ -84,12 +104,23 @@ export async function getProfileStatuses(): Promise<ProfileStatus[]> {
 }
 
 export async function getWsTicket(): Promise<string> {
-  const session = await getHermesSession();
   const baseUrl = process.env.HERMES_BASE_URL || "https://hermes.keetech.my.id";
-  const res = await fetch(`${baseUrl}/api/auth/ws-ticket`, {
+
+  let session = await getHermesSession();
+  let res = await fetch(`${baseUrl}/api/auth/ws-ticket`, {
     method: "POST",
     headers: { Cookie: session.cookie },
   });
+
+  if (res.status === 401) {
+    cachedSession = null;
+    session = await getHermesSession(true);
+    res = await fetch(`${baseUrl}/api/auth/ws-ticket`, {
+      method: "POST",
+      headers: { Cookie: session.cookie },
+    });
+  }
+
   if (!res.ok) {
     throw new Error(`Gagal mendapat ws-ticket (HTTP ${res.status})`);
   }

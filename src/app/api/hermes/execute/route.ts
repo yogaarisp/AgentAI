@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getHermesSession, getWsTicket } from "@/lib/hermes-server";
+import { getHermesSession, getWsTicket, clearHermesSession } from "@/lib/hermes-server";
 import { setRun, getRun, removeRun } from "@/lib/hermes-gateway-registry";
 
 interface GatewayFrame {
@@ -54,6 +54,9 @@ async function runHermesTask(opts: {
   let sessionId = "";
   let aborted = false;
   let nextId = 1;
+  let lastErrEvent = "";
+  let retriedNewSession = false;
+  const usedExisting = Boolean(existingSessionId);
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   const cleanup = () => { try { socket.close(); } catch { /* noop */ } };
   const rejectAll = (e: Error) => { for (const [, p] of pending) p.reject(e); pending.clear(); };
@@ -75,6 +78,30 @@ async function runHermesTask(opts: {
       });
       socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });
+  };
+  const createSession = async (): Promise<string> => {
+    const created = await rpc<{ session_id: string }>(
+      "session.create",
+      { profile, title: `Dashboard: ${task.slice(0, 60)}` },
+      30_000
+    );
+    const sid = created.session_id;
+    if (!sid) throw new Error("session.create tidak mengembalikan session_id");
+    sessionId = sid;
+    onSession?.(sid);
+    setRun(sid, {
+      socket,
+      call: (method, params, timeoutMsEach) => rpc(method, params, timeoutMsEach),
+      pendingDecision: false,
+    });
+    return sid;
+  };
+  const submitPrompt = async (sid: string) => {
+    try {
+      await rpc("prompt.submit", { session_id: sid, text: task }, timeoutMs);
+    } catch (e: any) {
+      lastErrEvent = e?.message || "";
+    }
   };
   try {
     if (aborted) throw new Error("Dibatalkan");
@@ -118,6 +145,7 @@ async function runHermesTask(opts: {
         if (entry) entry.pendingDecision = true;
       } else if (type === "error") {
         const text = sanitize(JSON.stringify(frame.params?.payload ?? {})).slice(0, 240);
+        lastErrEvent = text;
         events.push(`[${type}] ${text}`);
         onFrame?.({ kind: "error", type, text });
       } else if (type && ["tool.start", "tool.complete", "status.update", "thinking.delta"].includes(type)) {
@@ -128,27 +156,39 @@ async function runHermesTask(opts: {
     if (existingSessionId) {
       sessionId = existingSessionId;
       onSession?.(sessionId);
+      setRun(sessionId, {
+        socket,
+        call: (method, params, timeoutMsEach) => rpc(method, params, timeoutMsEach),
+        pendingDecision: false,
+      });
     } else {
-      const created = await rpc<{ session_id: string }>("session.create", { profile, title: `Dashboard: ${task.slice(0, 60)}` }, 30_000);
-      sessionId = created.session_id;
-      if (!sessionId) throw new Error("session.create tidak mengembalikan session_id");
-      onSession?.(sessionId);
+      await createSession();
     }
-    setRun(sessionId, {
-      socket,
-      call: (method, params, timeoutMsEach) => rpc(method, params, timeoutMsEach),
-      pendingDecision: false,
-    });
-    await rpc("prompt.submit", { session_id: sessionId, text: task }, timeoutMs);
+    await submitPrompt(sessionId);
     const hardCap = Date.now() + 15 * 60_000;
     let deadline = Date.now() + timeoutMs;
     while (Date.now() < Math.min(deadline, hardCap) && !output && !aborted) {
+      if (!retriedNewSession && usedExisting && /session not found/i.test(lastErrEvent)) {
+        retriedNewSession = true;
+        lastErrEvent = "";
+        output = "";
+        removeRun(sessionId);
+        await createSession();
+        onFrame?.({ kind: "status", type: "info", text: "Sesi lama tidak ada di gateway — sesi baru dibuat otomatis." });
+        await submitPrompt(sessionId);
+      }
+      if (/session not found/i.test(lastErrEvent) && retriedNewSession && output) break;
       await new Promise((r) => setTimeout(r, 400));
       const entry = getRun(sessionId);
       if (entry?.pendingDecision) deadline = Math.max(deadline, Date.now() + 45_000);
     }
     if (aborted) throw new Error("Dibatalkan");
-    if (!output) throw new Error("Tidak ada output dari Hermes sebelum timeout");
+    if (!output) {
+      if (/session not found/i.test(lastErrEvent)) {
+        throw new Error("Session not found — sesi lama sudah hilang di gateway, kirim ulang pesanmu untuk mulai sesi baru.");
+      }
+      throw new Error("Tidak ada output dari Hermes sebelum timeout");
+    }
     return { output, events, sessionId };
   } finally {
     signal?.removeEventListener("abort", onAbort);
@@ -175,25 +215,39 @@ export async function POST(req: NextRequest) {
           closed = true;
         }
       };
+      const opts = {
+        profile,
+        task,
+        existingSessionId: typeof body.sessionId === "string" && body.sessionId ? body.sessionId : undefined,
+        signal: req.signal,
+        onSession: (id: string) => send("session", { sessionId: id }),
+        onFrame: (u: { kind: string; type: string; text: string }) => {
+          if (u.kind === "delta") {
+            send("delta", { text: u.text });
+          } else if (u.kind === "approval" || u.kind === "clarify") {
+            send(u.kind, { type: u.type, text: u.text });
+          } else if (u.kind === "thinking") {
+            /* ignore */
+          } else {
+            send("event", { type: u.type, text: u.text });
+          }
+        },
+      };
       let output = "";
       try {
-        const result = await runHermesTask({
-          profile,
-          task,
-          existingSessionId: typeof body.sessionId === "string" && body.sessionId ? body.sessionId : undefined,
-          signal: req.signal,
-          onSession: (id) => send("session", { sessionId: id }),
-          onFrame: (u) => {
-            if (u.kind === "delta") {
-              output += u.text;
-              send("delta", { text: u.text });
-            } else if (u.kind === "approval" || u.kind === "clarify") {
-              send(u.kind, { type: u.type, text: u.text });
-            } else {
-              send("event", { type: u.type, text: u.text });
-            }
-          },
-        });
+        let result;
+        try {
+          result = await runHermesTask(opts);
+        } catch (err: any) {
+          if (/HTTP 401/.test(err?.message || "")) {
+            clearHermesSession();
+            send("event", { type: "info", text: "Login Hermes kedaluwarsa — login ulang otomatis..." });
+            result = await runHermesTask(opts);
+          } else {
+            throw err;
+          }
+        }
+        output = result.output;
         send("complete", { output: result.output, sessionId: result.sessionId, events: result.events });
       } catch (err: any) {
         send("error", { message: err?.message || "Hermes bridge gagal", partial: output });
