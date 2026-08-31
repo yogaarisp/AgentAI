@@ -9,9 +9,17 @@ interface Props {
   onClose: () => void;
 }
 
+type PendingMeta = {
+  kind: "approval" | "clarify";
+  requestId: string;
+  status: "pending" | "approved" | "rejected" | "answered";
+  response?: string;
+};
+
 type ChatMsg = {
-  role: "user" | "agent" | "event" | "sys";
+  role: "user" | "agent" | "event" | "sys" | "approval" | "clarify";
   text: string;
+  meta?: PendingMeta;
 };
 
 function storageKeys(agentId: string) {
@@ -47,9 +55,13 @@ function saveChat(agentId: string, sessionId: string | null, messages: ChatMsg[]
 export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props) {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [streamingStarted, setStreamingStarted] = useState(false);
   const [taskInput, setTaskInput] = useState("");
+  const [clarifyDraft, setClarifyDraft] = useState<Record<string, string>>({});
   const sessionIdRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMsg[]>([]);
+  const streamIndexRef = useRef<number>(-1);
+  const abortRef = useRef<AbortController | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
 
   const pushMessages = useCallback(
@@ -65,33 +77,95 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
     if (!isOpen) return;
     const saved = loadChat(agent.id);
     sessionIdRef.current = saved.sessionId;
-    messagesRef.current = saved.messages;
-    if (saved.messages.length === 0) {
-      const welcome: ChatMsg[] = [
-        {
-          role: "sys",
-          text: `Chat bridge ke profil '${agent.hermesProfileKey}' siap. Konteks percakapan tersimpan otomatis untuk agen ini.`,
-        },
-      ];
-      messagesRef.current = welcome;
-      setMessages(welcome);
-      saveChat(agent.id, null, welcome);
-    } else {
-      setMessages(saved.messages);
-    }
-  }, [isOpen, agent]);
+    messagesRef.current = saved.messages.map((m) =>
+      m.meta && m.meta.status === "pending"
+        ? { ...m, meta: { ...m.meta, status: "answered" as const, response: "sesi berakhir" } }
+        : m
+    );
+    setMessages(messagesRef.current);
+    saveChat(agent.id, sessionIdRef.current, messagesRef.current);
+  }, [isOpen, agent.id]);
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isThinking]);
+  }, [messages, isThinking, streamingStarted]);
+
+  const hasPending = messages.some((m) => m.meta?.status === "pending");
+
+  const updateMeta = (requestId: string, patch: Partial<PendingMeta>) => {
+    const msgs = messagesRef.current.map((m) =>
+      m.meta && m.meta.requestId === requestId ? { ...m, meta: { ...m.meta, ...patch } } : m
+    );
+    messagesRef.current = msgs;
+    setMessages(msgs);
+    saveChat(agent.id, sessionIdRef.current, msgs);
+  };
+
+  const sendDecision = async (
+    kind: "approval" | "clarify",
+    requestId: string,
+    decision?: "approved" | "rejected",
+    answer?: string
+  ) => {
+    const status = kind === "approval" ? (decision === "rejected" ? "rejected" : "approved") : "answered";
+    try {
+      const res = await fetch("/api/hermes/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: sessionIdRef.current, kind, requestId, decision, answer }),
+      });
+      const data = await res.json();
+      updateMeta(requestId, { status, response: data.method ? `via ${data.method}` : data.error });
+      if (!data.success) {
+        pushMessages([{ role: "event", text: `ERROR: ${data.error}` }]);
+      } else {
+        pushMessages([
+          { role: "event", text: `${kind === "approval" ? `Approval ${decision}` : "Jawaban clarify"} dikirim (${data.method}). Agent melanjutkan...` },
+        ]);
+      }
+    } catch (err: any) {
+      updateMeta(requestId, { status: "pending" });
+      pushMessages([{ role: "event", text: `ERROR: ${err?.message || "gagal mengirim keputusan"}` }]);
+    }
+  };
 
   const sendMessage = async () => {
     const text = taskInput.trim();
-    if (!text || isThinking) return;
+    if (!text || isThinking || hasPending) return;
 
+    const controller = new AbortController();
+    abortRef.current = controller;
     setIsThinking(true);
+    setStreamingStarted(false);
     setTaskInput("");
+    streamIndexRef.current = -1;
     pushMessages([{ role: "user", text }]);
+
+    const appendDelta = (t: string) => {
+      const msgs = [...messagesRef.current];
+      if (streamIndexRef.current === -1) {
+        msgs.push({ role: "agent", text: t });
+        streamIndexRef.current = msgs.length - 1;
+        setStreamingStarted(true);
+      } else {
+        const m = msgs[streamIndexRef.current];
+        msgs[streamIndexRef.current] = { ...m, text: m.text + t };
+      }
+      messagesRef.current = msgs;
+      setMessages(msgs);
+    };
+
+    const setStreamFinal = (t: string) => {
+      if (streamIndexRef.current === -1) {
+        pushMessages([{ role: "agent", text: t }]);
+        return;
+      }
+      const msgs = [...messagesRef.current];
+      msgs[streamIndexRef.current] = { role: "agent", text: t };
+      messagesRef.current = msgs;
+      setMessages(msgs);
+      saveChat(agent.id, sessionIdRef.current, msgs);
+    };
 
     try {
       const response = await fetch("/api/hermes/execute", {
@@ -103,40 +177,92 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
           task: text,
           sessionId: sessionIdRef.current,
         }),
+        signal: controller.signal,
       });
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
-      const data = await response.json();
-
-      if (!data.success) {
-        pushMessages([{ role: "event", text: `ERROR: ${data.error || "Hermes bridge gagal"}` }]);
-        return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let done = false;
+      while (!done) {
+        const chunk = await reader.read();
+        done = chunk.done;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          let event = "message";
+          let data = "";
+          for (const line of part.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          if (!data) continue;
+          let payload: any;
+          try { payload = JSON.parse(data); } catch { continue; }
+          if (event === "session") {
+            sessionIdRef.current = payload.sessionId || sessionIdRef.current;
+            setMessages([...messagesRef.current]);
+          } else if (event === "delta") {
+            if (payload.text) appendDelta(payload.text);
+          } else if (event === "event") {
+            pushMessages([{ role: "event", text: `[${payload.type}] ${payload.text}` }]);
+          } else if (event === "approval" || event === "clarify") {
+            let requestId = `req_${Date.now()}`;
+            let pretty = "";
+            try {
+              const parsed = JSON.parse(payload.text);
+              requestId = parsed.requestId || requestId;
+              pretty = JSON.stringify(parsed.payload ?? parsed, null, 1).slice(0, 800);
+            } catch {
+              pretty = payload.text;
+            }
+            pushMessages([
+              {
+                role: event,
+                text: pretty,
+                meta: { kind: event, requestId, status: "pending" },
+              },
+            ]);
+          } else if (event === "complete") {
+            sessionIdRef.current = payload.sessionId || sessionIdRef.current;
+            setStreamFinal(payload.output || "...");
+            pushMessages([]);
+          } else if (event === "error") {
+            pushMessages([{ role: "event", text: `ERROR: ${payload.message}` }]);
+            saveChat(agent.id, sessionIdRef.current, messagesRef.current);
+          }
+        }
       }
-
-      sessionIdRef.current = data.sessionId || sessionIdRef.current;
-
-      const toolEvents: ChatMsg[] = Array.isArray(data.response?.steps)
-        ? data.response.steps
-            .filter((s: string) => s.startsWith("[tool.") || s.startsWith("[approval") || s.startsWith("[clarify") || s.startsWith("[error"))
-            .map((s: string) => ({ role: "event" as const, text: s }))
-        : [];
-
-      pushMessages([...toolEvents, { role: "agent", text: data.response?.output || "..." }]);
     } catch (err: any) {
-      pushMessages([
-        { role: "event", text: `ERROR: ${err.message || "Failed to reach Hermes backend"}` },
-      ]);
+      if (err?.name === "AbortError") {
+        pushMessages([{ role: "event", text: "Dibatalkan oleh operator." }]);
+      } else {
+        pushMessages([{ role: "event", text: `ERROR: ${err?.message || "Failed to reach Hermes backend"}` }]);
+        saveChat(agent.id, sessionIdRef.current, messagesRef.current);
+      }
     } finally {
+      abortRef.current = null;
       setIsThinking(false);
+      setStreamingStarted(false);
+      streamIndexRef.current = -1;
     }
+  };
+
+  const stopStreaming = () => {
+    abortRef.current?.abort();
+  };
+
+  const handleClose = () => {
+    abortRef.current?.abort();
+    onClose();
   };
 
   const resetSession = () => {
     sessionIdRef.current = null;
     messagesRef.current = [
-      {
-        role: "sys",
-        text: "Sesi baru dimulai. Konteks sebelumnya sudah dibuang.",
-      },
+      { role: "sys", text: "Sesi baru dimulai. Konteks sebelumnya sudah dibuang." },
     ];
     setMessages(messagesRef.current);
     saveChat(agent.id, null, messagesRef.current);
@@ -147,7 +273,6 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in">
       <div className="relative w-full max-w-2xl h-[80vh] flex flex-col rounded-2xl border border-white/15 bg-[#0d0d12] shadow-2xl overflow-hidden">
-        {/* Chat Header */}
         <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5 bg-white/[0.02]">
           <div className="flex items-center gap-3">
             <div className="flex gap-1.5">
@@ -182,7 +307,7 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
               [NEW SESSION]
             </button>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="text-white/60 hover:text-white text-xs font-mono px-2 py-1 rounded hover:bg-white/10 transition-colors"
             >
               [ESC / CLOSE]
@@ -190,7 +315,6 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
           </div>
         </div>
 
-        {/* Progress bar */}
         <div className="h-0.5 w-full bg-white/5 shrink-0">
           <div
             className={`h-full transition-all duration-500 ${isThinking ? "w-full animate-pulse" : "w-0"}`}
@@ -198,7 +322,6 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
           />
         </div>
 
-        {/* Messages area */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/60">
           {messages.map((msg, index) => {
             if (msg.role === "sys") {
@@ -219,6 +342,84 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
                 </div>
               );
             }
+            if ((msg.role === "approval" || msg.role === "clarify") && msg.meta) {
+              const meta = msg.meta;
+              const pending = meta.status === "pending";
+              return (
+                <div key={index} className="flex justify-start">
+                  <div
+                    className="max-w-[85%] rounded-xl px-3.5 py-2.5 text-xs font-mono border"
+                    style={{
+                      borderColor: pending ? "#f59e0b80" : "#71717a40",
+                      background: pending ? "rgba(245,158,11,0.06)" : "rgba(255,255,255,0.02)",
+                    }}
+                  >
+                    <span className="block text-[9px] font-bold tracking-widest uppercase mb-1.5 text-amber-400">
+                      {msg.role === "approval" ? "APPROVAL REQUEST" : "AGENT BUTUH JAWABAN"}
+                    </span>
+                    <pre className="text-[10px] text-zinc-200 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{msg.text}</pre>
+                    {msg.role === "approval" && (
+                      <div className="flex gap-2 mt-2.5">
+                        <button
+                          disabled={!pending}
+                          onClick={() => sendDecision("approval", meta.requestId, "approved")}
+                          className="px-3 py-1 rounded bg-emerald-500 text-black text-[10px] font-bold disabled:opacity-40"
+                        >
+                          APPROVE
+                        </button>
+                        <button
+                          disabled={!pending}
+                          onClick={() => sendDecision("approval", meta.requestId, "rejected")}
+                          className="px-3 py-1 rounded bg-red-500 text-white text-[10px] font-bold disabled:opacity-40"
+                        >
+                          REJECT
+                        </button>
+                      </div>
+                    )}
+                    {msg.role === "clarify" && (
+                      <div className="flex gap-2 mt-2.5">
+                        <input
+                          type="text"
+                          value={clarifyDraft[meta.requestId] || ""}
+                          disabled={!pending}
+                          onChange={(e) => setClarifyDraft((d) => ({ ...d, [meta.requestId]: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && pending) {
+                              const answer = clarifyDraft[meta.requestId]?.trim();
+                              if (answer) {
+                                sendDecision("clarify", meta.requestId, undefined, answer);
+                                setClarifyDraft((d) => ({ ...d, [meta.requestId]: "" }));
+                              }
+                            }
+                          }}
+                          placeholder="Ketik jawabanmu..."
+                          className="flex-1 bg-black/40 border border-white/15 rounded px-2 py-1 text-[10px] text-white disabled:opacity-40"
+                        />
+                        <button
+                          disabled={!pending || !clarifyDraft[meta.requestId]?.trim()}
+                          onClick={() => {
+                            const answer = clarifyDraft[meta.requestId]?.trim();
+                            if (answer) {
+                              sendDecision("clarify", meta.requestId, undefined, answer);
+                              setClarifyDraft((d) => ({ ...d, [meta.requestId]: "" }));
+                            }
+                          }}
+                          className="px-3 py-1 rounded bg-amber-500 text-black text-[10px] font-bold disabled:opacity-40"
+                        >
+                          SEND
+                        </button>
+                      </div>
+                    )}
+                    {!pending && (
+                      <div className="mt-1.5 text-[9px] text-zinc-500">
+                        {meta.status.toUpperCase()}
+                        {meta.response ? ` · ${meta.response}` : ""}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
             const isUser = msg.role === "user";
             return (
               <div key={index} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -228,11 +429,7 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
                       ? "bg-amber-500/10 border-amber-500/25 text-amber-100 rounded-br-sm"
                       : "bg-white/[0.04] text-zinc-100 rounded-bl-sm"
                   }`}
-                  style={
-                    !isUser
-                      ? { borderColor: `${agent.themeColor.hex}45` }
-                      : undefined
-                  }
+                  style={!isUser ? { borderColor: `${agent.themeColor.hex}45` } : undefined}
                 >
                   {!isUser && (
                     <span
@@ -247,7 +444,7 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
               </div>
             );
           })}
-          {isThinking && (
+          {isThinking && !streamingStarted && (
             <div className="flex justify-start">
               <div
                 className="rounded-xl px-3.5 py-2.5 bg-white/[0.04] border rounded-bl-sm"
@@ -259,7 +456,7 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
                     style={{ backgroundColor: agent.themeColor.hex }}
                   />
                   <span className="text-[10px] font-mono text-zinc-400">
-                    {agent.displayName} sedang mengerjakan... (bisa 1–2 menit)
+                    menyambung ke Hermes gateway...
                   </span>
                 </div>
               </div>
@@ -268,7 +465,6 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
           <div ref={scrollEndRef} />
         </div>
 
-        {/* Input bar */}
         <div className="border-t border-white/10 px-4 py-3 bg-black/40 flex items-center gap-2 shrink-0">
           <span className="text-xs font-mono font-bold shrink-0" style={{ color: agent.themeColor.hex }}>
             CHAT&gt;
@@ -278,22 +474,24 @@ export default function ExecutionTerminalModal({ agent, isOpen, onClose }: Props
             value={taskInput}
             onChange={(e) => setTaskInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !isThinking) sendMessage();
+              if (e.key === "Enter" && !isThinking && !hasPending) sendMessage();
             }}
-            placeholder={`Kirim pesan ke ${agent.displayName}...`}
-            className="flex-1 bg-transparent text-xs font-mono text-white placeholder-zinc-500 focus:outline-none"
+            placeholder={hasPending ? "Selesaikan dulu approval/clarify di atas..." : `Kirim pesan ke ${agent.displayName}...`}
+            disabled={hasPending}
+            className="flex-1 bg-transparent text-xs font-mono text-white placeholder-zinc-500 focus:outline-none disabled:opacity-50"
           />
           <button
-            onClick={sendMessage}
-            disabled={isThinking || !taskInput.trim()}
-            className="px-4 py-1.5 rounded-lg disabled:opacity-40 text-[11px] font-mono font-bold text-black transition-all shrink-0"
-            style={{ backgroundColor: agent.themeColor.hex }}
+            onClick={isThinking ? stopStreaming : sendMessage}
+            disabled={(!isThinking && !taskInput.trim()) || hasPending}
+            className={`px-4 py-1.5 rounded-lg disabled:opacity-40 text-[11px] font-mono font-bold transition-all shrink-0 ${
+              isThinking ? "bg-red-500 text-white" : "text-black"
+            }`}
+            style={!isThinking ? { backgroundColor: agent.themeColor.hex } : undefined}
           >
-            {isThinking ? "..." : "SEND"}
+            {isThinking ? "STOP" : "SEND"}
           </button>
         </div>
 
-        {/* Footer */}
         <div className="flex items-center justify-between border-t border-white/10 px-5 py-2 bg-white/[0.02] text-[10px] text-zinc-500 font-mono shrink-0">
           <span>
             Sesi: <strong className="text-zinc-300">{sessionIdRef.current || "baru (menunggu pesan pertama)"}</strong>
