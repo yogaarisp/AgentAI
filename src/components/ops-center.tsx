@@ -1,7 +1,37 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import type { Agent } from "@/lib/agents";
+import { playJarvisChime, speak, stopSpeaking } from "@/lib/tts";
+
+const ttsStore = {
+  listeners: new Set<() => void>(),
+  get(): boolean {
+    return localStorage.getItem("ops_tts") !== "0";
+  },
+  set(on: boolean) {
+    localStorage.setItem("ops_tts", on ? "1" : "0");
+    ttsStore.listeners.forEach((l) => l());
+  },
+  subscribe(l: () => void) {
+    ttsStore.listeners.add(l);
+    return () => {
+      ttsStore.listeners.delete(l);
+    };
+  },
+};
+
+function wmoLabel(code: number): string {
+  if (code === 0) return "CLEAR";
+  if (code <= 3) return "CLOUDY";
+  if (code <= 48) return "FOG";
+  if (code <= 57) return "DRIZZLE";
+  if (code <= 67) return "RAIN";
+  if (code <= 77) return "SNOW";
+  if (code <= 82) return "SHOWERS";
+  if (code <= 86) return "SNOW";
+  return "STORM";
+}
 
 type PendingMeta = {
   kind: "approval" | "clarify";
@@ -222,12 +252,52 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const [listening, setListening] = useState(false);
   const [clarifyDraft, setClarifyDraft] = useState<Record<string, string>>({});
   const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [env, setEnv] = useState<{ location: string; weather: string } | null>(null);
   const [mounted, setMounted] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const feedRef = useRef<FeedMsg[]>([]);
   const streamIndexRef = useRef<number>(-1);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const ttsOnRef = useRef(true);
+  const introSpokenRef = useRef(false);
+
+  const ttsOn = useSyncExternalStore(
+    ttsStore.subscribe,
+    ttsStore.get,
+    () => true
+  );
+
+  useEffect(() => {
+    ttsOnRef.current = ttsOn;
+  }, [ttsOn]);
+
+  const setTts = (on: boolean) => {
+    ttsOnRef.current = on;
+    ttsStore.set(on);
+    if (!on) stopSpeaking();
+  };
+
+  // Suara perkenalan saat halaman pertama kali dibuka.
+  // Browser memblokir audio tanpa gesture, jadi dicoba langsung lalu diulang
+  // pada interaksi pertama (klik / tekan tombol) jika masih terblokir.
+  useEffect(() => {
+    const tryIntro = () => {
+      if (introSpokenRef.current) return;
+      introSpokenRef.current = true;
+      speak("Hai Keenan. My name is Jarvis.");
+    };
+    const t = setTimeout(tryIntro, 500);
+    const onGesture = () => tryIntro();
+    window.addEventListener("pointerdown", onGesture, { once: true });
+    window.addEventListener("keydown", onGesture, { once: true });
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("pointerdown", onGesture);
+      window.removeEventListener("keydown", onGesture);
+      stopSpeaking();
+    };
+  }, []);
 
   const pushFeed = useCallback((msgs: Omit<FeedMsg, "id" | "ts">[]) => {
     const stamped = msgs.map((m) => ({ ...m, id: uid(), ts: new Date().toISOString() }));
@@ -288,6 +358,40 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     };
   }, []);
 
+  // ENV_TELEMETRY: lokasi visitor via IP (ipwho.is) + cuaca via open-meteo.
+  useEffect(() => {
+    let stop = false;
+    const load = async () => {
+      try {
+        const geo = await fetch("https://ipwho.is/", { cache: "no-store" }).then((r) => r.json());
+        if (stop || !geo?.success) return;
+        const location = [geo.city, geo.country_code].filter(Boolean).join(", ") || "-.-.-.";
+        let weather = "-.-.-.";
+        if (typeof geo.latitude === "number" && typeof geo.longitude === "number") {
+          try {
+            const w = await fetch(
+              `https://api.open-meteo.com/v1/forecast?latitude=${geo.latitude}&longitude=${geo.longitude}&current=temperature_2m,weather_code`,
+              { cache: "no-store" }
+            ).then((r) => r.json());
+            const cur = w?.current;
+            if (cur && typeof cur.temperature_2m === "number") {
+              weather = `${wmoLabel(Number(cur.weather_code))} ${Math.round(cur.temperature_2m)}°C`;
+            }
+          } catch {
+            /* cuaca opsional */
+          }
+        }
+        if (!stop) setEnv({ location, weather });
+      } catch {
+        /* biarkan placeholder */
+      }
+    };
+    load();
+    return () => {
+      stop = true;
+    };
+  }, []);
+
   const updateMeta = (requestId: string, patch: Partial<PendingMeta>) => {
     feedRef.current = feedRef.current.map((m) =>
       m.meta && m.meta.requestId === requestId ? { ...m, meta: { ...m.meta, ...patch } } : m
@@ -336,6 +440,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         ];
         streamIndexRef.current = 0;
         setStreamingStarted(true);
+        if (ttsOnRef.current) playJarvisChime();
       } else {
         const m = feedRef.current[streamIndexRef.current];
         feedRef.current[streamIndexRef.current] = { ...m, text: m.text + t };
@@ -346,10 +451,11 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     const setStreamFinal = (t: string) => {
       if (streamIndexRef.current === -1) {
         pushFeed([{ role: "agent", text: t }]);
-        return;
+      } else {
+        feedRef.current[streamIndexRef.current] = { ...feedRef.current[streamIndexRef.current], text: t };
+        setFeed([...feedRef.current]);
       }
-      feedRef.current[streamIndexRef.current] = { ...feedRef.current[streamIndexRef.current], text: t };
-      setFeed([...feedRef.current]);
+      if (ttsOnRef.current) speak(t);
     };
 
     try {
@@ -490,14 +596,16 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         <CornerFrame className="p-3">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[9px] font-mono font-bold tracking-[0.2em] text-amber-400 flex items-center gap-1.5">
-              <span className="size-1.5 rounded-full bg-red-500" />
+              <span className={`size-1.5 rounded-full ${env ? "bg-emerald-400" : "bg-red-500"}`} />
               ENV_TELEMETRY
             </span>
-            <span className="text-[8px] font-mono text-zinc-400 border border-white/10 px-1.5 py-0.5">OFFLINE</span>
+            <span className="text-[8px] font-mono text-zinc-400 border border-white/10 px-1.5 py-0.5">
+              {env ? "ONLINE" : "OFFLINE"}
+            </span>
           </div>
           {[
-            ["LOCATION", "-.-.-."],
-            ["WEATHER", "-.-.-."],
+            ["LOCATION", env?.location || "-.-.-."],
+            ["WEATHER", env?.weather || "-.-.-."],
             ["VISITOR IP", stats?.visitorIp || "-.-.-."],
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between items-baseline mb-2">
@@ -518,6 +626,20 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         <RadarSphere active={isThinking} />
 
         <div className="flex items-center gap-4 mt-4 mb-3">
+          <button
+            onClick={() => setTts(!ttsOn)}
+            className={`relative size-12 rounded-full border flex items-center justify-center transition-all ${
+              ttsOn
+                ? "border-amber-400/40 text-amber-400 hover:bg-amber-400/10"
+                : "border-white/10 text-zinc-600 hover:text-zinc-400"
+            }`}
+            title={ttsOn ? "TTS aktif — klik untuk matikan" : "TTS mati — klik untuk nyalakan"}
+          >
+            <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
+            </svg>
+            {!ttsOn && <span className="absolute w-[2px] h-6 bg-zinc-500 rotate-45 rounded-full" />}
+          </button>
           <button
             onClick={startVoice}
             className={`size-12 rounded-full border border-amber-400/40 flex items-center justify-center text-amber-400 hover:bg-amber-400/10 transition-all ${listening ? "animate-pulse bg-amber-400/20" : ""}`}
@@ -583,7 +705,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
                     m.role === "user" ? "text-amber-400" : m.role === "agent" ? "text-emerald-400" : "text-cyan-300/70"
                   }`}
                 >
-                  {m.role === "user" ? "OPERATOR" : m.role === "agent" ? "KEEMES_AI" : m.role.toUpperCase()}
+                  {m.role === "user" ? "KEENAN" : m.role === "agent" ? "KEEMES_AI" : m.role.toUpperCase()}
                 </span>
                 <span className="text-[8px] font-mono text-zinc-600">
                   {new Date(m.ts).toLocaleTimeString("id-ID", { hour12: false })}

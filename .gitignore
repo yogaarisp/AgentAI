@@ -42,3 +42,6 @@ next-env.d.ts
 
 # local backups
 /AI-Dashboard-backup-*.zip
+
+# local model settings (api keys)
+/.data

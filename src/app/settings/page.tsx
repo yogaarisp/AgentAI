@@ -1,0 +1,288 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { agents } from "@/lib/agents";
+
+type ProviderKind = "gemini" | "openai-compatible";
+
+interface EntryForm {
+  provider: ProviderKind;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  hasKey?: boolean;
+  maskedKey?: string;
+}
+
+const GEMINI_BASE = "https://generativelanguage.googleapis.com";
+const GEMINI_MODEL = "gemini-3.6-flash";
+
+function emptyEntry(provider: ProviderKind = "gemini"): EntryForm {
+  return {
+    provider,
+    baseUrl: provider === "gemini" ? GEMINI_BASE : "https://api.openai.com/v1",
+    apiKey: "",
+    model: provider === "gemini" ? GEMINI_MODEL : "",
+  };
+}
+
+export default function SettingsPage() {
+  const [primary, setPrimary] = useState<EntryForm>(emptyEntry());
+  const [perAgent, setPerAgent] = useState<Record<string, EntryForm>>({});
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const [showKey, setShowKey] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    fetch("/api/settings", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) {
+          const p = d.settings.primary;
+          setPrimary({ ...p, apiKey: "" });
+          const pa: Record<string, EntryForm> = {};
+          for (const [id, e] of Object.entries(d.settings.perAgent ?? {}) as [string, EntryForm][]) {
+            pa[id] = { ...e, apiKey: "" };
+          }
+          setPerAgent(pa);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const keyPlaceholder = (e: EntryForm) =>
+    e.hasKey ? `tersimpan: ${e.maskedKey} — kosongkan jika tidak diubah` : "tempel API key di sini";
+
+  const save = async () => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const payload: { primary: EntryForm; perAgent: Record<string, EntryForm> } = { primary, perAgent: {} };
+      for (const [id, e] of Object.entries(perAgent)) {
+        if (e.apiKey || e.hasKey) payload.perAgent[id] = e;
+      }
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await res.json();
+      if (d.success) {
+        setSaveMsg({ ok: true, text: "Settings tersimpan." });
+        const p = d.settings.primary;
+        setPrimary({ ...p, apiKey: "" });
+        const pa: Record<string, EntryForm> = {};
+        for (const [id, e] of Object.entries(d.settings.perAgent ?? {}) as [string, EntryForm][]) {
+          pa[id] = { ...e, apiKey: "" };
+        }
+        setPerAgent(pa);
+      } else {
+        setSaveMsg({ ok: false, text: d.error || "Gagal menyimpan" });
+      }
+    } catch (err: unknown) {
+      setSaveMsg({ ok: false, text: err instanceof Error ? err.message : "Gagal menyimpan" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testSlot = async (slot: string, entry: EntryForm) => {
+    setTesting(slot);
+    setTestMsg((m) => ({ ...m, [slot]: { ok: true, text: "menguji..." } }));
+    try {
+      const res = await fetch("/api/settings/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slot, ...entry }),
+      });
+      const d = await res.json();
+      setTestMsg((m) => ({
+        ...m,
+        [slot]: d.success
+          ? { ok: true, text: `OK — balasan: "${d.reply}" (${d.model})` }
+          : { ok: false, text: d.error || "gagal" },
+      }));
+    } catch (err: unknown) {
+      setTestMsg((m) => ({
+        ...m,
+        [slot]: { ok: false, text: err instanceof Error ? err.message : "gagal" },
+      }));
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  const updatePrimary = (patch: Partial<EntryForm>) => setPrimary((p) => ({ ...p, ...patch }));
+  const updateAgent = (id: string, patch: Partial<EntryForm>) =>
+    setPerAgent((m) => ({ ...m, [id]: { ...(m[id] ?? emptyEntry()), ...patch } }));
+
+  const inputCls =
+    "w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs font-mono text-white placeholder-zinc-600 focus:border-amber-400/50 focus:outline-none";
+  const labelCls = "mb-1 block text-[10px] font-mono font-bold tracking-[0.15em] text-zinc-500 uppercase";
+
+  const providerFields = (slot: string, entry: EntryForm, onChange: (p: Partial<EntryForm>) => void) => (
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className={labelCls}>Provider</label>
+          <select
+            value={entry.provider}
+            onChange={(e) => onChange({ provider: e.target.value as ProviderKind })}
+            className={inputCls}
+          >
+            <option value="gemini">Gemini (Google AI Studio)</option>
+            <option value="openai-compatible">OpenAI-compatible</option>
+          </select>
+        </div>
+        <div>
+          <label className={labelCls}>Model</label>
+          <input
+            value={entry.model}
+            onChange={(e) => onChange({ model: e.target.value })}
+            placeholder={entry.provider === "gemini" ? GEMINI_MODEL : "misal: gpt-4o-mini"}
+            className={inputCls}
+          />
+        </div>
+      </div>
+      <div>
+        <label className={labelCls}>Base URL</label>
+        <input
+          value={entry.baseUrl}
+          onChange={(e) => onChange({ baseUrl: e.target.value })}
+          placeholder={entry.provider === "gemini" ? GEMINI_BASE : "https://api.openai.com/v1"}
+          className={inputCls}
+        />
+      </div>
+      <div>
+        <label className={labelCls}>API Key</label>
+        <div className="flex gap-2">
+          <input
+            type={showKey[slot] ? "text" : "password"}
+            value={entry.apiKey}
+            onChange={(e) => onChange({ apiKey: e.target.value })}
+            placeholder={keyPlaceholder(entry)}
+            className={inputCls}
+          />
+          <button
+            onClick={() => setShowKey((m) => ({ ...m, [slot]: !m[slot] }))}
+            className="rounded-lg border border-white/10 px-2 text-[10px] font-mono text-zinc-400 hover:text-white"
+            title="tampilkan/sembunyikan"
+          >
+            {showKey[slot] ? "HIDE" : "SHOW"}
+          </button>
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => testSlot(slot, entry)}
+          disabled={testing === slot}
+          className="rounded-lg border border-cyan-400/40 px-3 py-1.5 text-[10px] font-mono font-bold tracking-widest text-cyan-300 hover:bg-cyan-400/10 disabled:opacity-40"
+        >
+          {testing === slot ? "TESTING..." : "TEST KONEKSI"}
+        </button>
+        {testMsg[slot] && (
+          <span className={`text-[10px] font-mono ${testMsg[slot].ok ? "text-emerald-400" : "text-red-400"}`}>
+            {testMsg[slot].text}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="relative min-h-screen bg-[#08080a] text-zinc-100 selection:bg-amber-500/30">
+      <div className="fixed inset-0 hud-grid-dots pointer-events-none opacity-40" />
+      <div className="relative z-10 mx-auto max-w-3xl px-6 py-10">
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-mono font-bold tracking-[0.2em] text-white">MODEL SETTINGS</h1>
+            <p className="mt-1 text-[11px] font-mono text-zinc-500">
+              Primary key dipakai semua agent. Fallback opsional per agent.
+            </p>
+          </div>
+          <Link
+            href="/"
+            className="rounded-lg border border-white/10 px-3 py-1.5 text-[10px] font-mono text-zinc-400 hover:text-white"
+          >
+            ← DASHBOARD
+          </Link>
+        </div>
+
+        {/* Urutan eksekusi */}
+        <div className="mb-8 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+          <p className="text-[10px] font-mono font-bold tracking-[0.2em] text-amber-400">URUTAN EKSEKUSI</p>
+          <p className="mt-2 text-[11px] font-mono leading-relaxed text-zinc-400">
+            1. <span className="text-white">PRIMARY</span> (Gemini / AI Studio key) → jika gagal{" "}
+            <span className="text-white">2. FALLBACK PER-AGENT</span> (jika diisi) → jika gagal{" "}
+            <span className="text-white">3. HERMES GATEWAY</span> (server Hermes, sebagai jaring pengaman).
+          </p>
+        </div>
+
+        {/* Primary */}
+        <section className="mb-8 rounded-xl border border-amber-400/25 bg-black/40 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-[11px] font-mono font-bold tracking-[0.2em] text-amber-400">★ PRIMARY — SEMUA AGENT</h2>
+            {primary.hasKey && (
+              <span className="rounded border border-emerald-400/30 px-1.5 py-0.5 text-[9px] font-mono text-emerald-400">
+                KEY TERPASANG
+              </span>
+            )}
+          </div>
+          {providerFields("primary", primary, updatePrimary)}
+        </section>
+
+        {/* Fallback per agent */}
+        <section className="mb-8">
+          <h2 className="mb-3 text-[11px] font-mono font-bold tracking-[0.2em] text-zinc-400">
+            FALLBACK PER-AGENT <span className="text-zinc-600">(opsional)</span>
+          </h2>
+          <div className="space-y-3">
+            {agents.map((a) => {
+              const entry = perAgent[a.id] ?? { ...emptyEntry(), apiKey: "", hasKey: false, maskedKey: undefined };
+              const active = Boolean(perAgent[a.id]?.hasKey || perAgent[a.id]?.apiKey);
+              return (
+                <div key={a.id} className={`rounded-xl border p-4 ${active ? "border-emerald-400/20 bg-black/40" : "border-white/10 bg-black/20"}`}>
+                  <details>
+                    <summary className="flex cursor-pointer list-none items-center justify-between">
+                      <span className="text-[11px] font-mono font-bold text-white">
+                        {a.displayName} <span className="ml-2 text-zinc-600">/{a.id}</span>
+                      </span>
+                      <span className="text-[9px] font-mono text-zinc-500">
+                        {active ? <span className="text-emerald-400">FALLBACK AKTIF ▾</span> : "belum diisi ▾"}
+                      </span>
+                    </summary>
+                    <div className="mt-4">
+                      {providerFields(a.id, entry, (patch) => updateAgent(a.id, patch))}
+                    </div>
+                  </details>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Save */}
+        <div className="sticky bottom-4 flex items-center gap-4 rounded-xl border border-white/10 bg-black/80 p-4 backdrop-blur">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="rounded-lg bg-amber-500 px-5 py-2 text-[11px] font-mono font-bold tracking-widest text-black hover:bg-amber-400 disabled:opacity-40"
+          >
+            {saving ? "MENYIMPAN..." : "SIMPAN SETTINGS"}
+          </button>
+          {saveMsg && (
+            <span className={`text-[11px] font-mono ${saveMsg.ok ? "text-emerald-400" : "text-red-400"}`}>
+              {saveMsg.text}
+            </span>
+          )}
+          <span className="ml-auto text-[9px] font-mono text-zinc-600">
+            key disimpan di server (.data/) — tidak ikut git
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}

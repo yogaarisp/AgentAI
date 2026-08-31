@@ -2,6 +2,9 @@ import { NextRequest } from "next/server";
 import { getHermesSession, getWsTicket, clearHermesSession } from "@/lib/hermes-server";
 import { setRun, getRun, removeRun } from "@/lib/hermes-gateway-registry";
 import { logActivity } from "@/lib/activity-log";
+import { loadModelSettings } from "@/lib/model-settings";
+import { callDirectLlm } from "@/lib/llm-direct";
+import { agents } from "@/lib/agents";
 
 interface GatewayFrame {
   id?: number | string | null;
@@ -249,8 +252,10 @@ export async function POST(req: NextRequest) {
         },
       };
       let output = "";
-      try {
-        logActivity({ agentId, agentName, type: "task", text: "memulai: " + task.slice(0, 60) });
+      const agentMeta = agents.find((a) => a.id === agentId);
+      const modelSettings = loadModelSettings();
+
+      const runWithHermes = async () => {
         let result;
         try {
           result = await runHermesTask(opts);
@@ -267,12 +272,73 @@ export async function POST(req: NextRequest) {
             throw err;
           }
         }
-        output = result.output;
-        logActivity({ agentId, agentName, type: "task", text: "selesai: " + output.slice(0, 60) });
-        send("complete", { output: result.output, sessionId: result.sessionId, events: result.events });
+        return result;
+      };
+
+      // Rantai eksekusi: primary LLM → fallback per-agent → Hermes gateway.
+      const chain: { label: string; run: () => Promise<{ text: string; sessionId?: string; events?: string[] }> }[] = [];
+      if (modelSettings.primary.apiKey) {
+        chain.push({
+          label: `primary:${modelSettings.primary.model}`,
+          run: () =>
+            callDirectLlm(modelSettings.primary, {
+              task,
+              agentName,
+              agentRole: agentMeta?.role,
+              signal: req.signal,
+            }),
+        });
+      }
+      const agentFallback = agentId ? modelSettings.perAgent[agentId] : undefined;
+      if (agentFallback?.apiKey) {
+        chain.push({
+          label: `fallback:${agentId}:${agentFallback.model}`,
+          run: () =>
+            callDirectLlm(agentFallback, {
+              task,
+              agentName,
+              agentRole: agentMeta?.role,
+              signal: req.signal,
+            }),
+        });
+      }
+      chain.push({
+        label: "hermes",
+        run: async () => {
+          const r = await runWithHermes();
+          return { text: r.output, sessionId: r.sessionId, events: r.events };
+        },
+      });
+
+      let lastError: Error | null = null;
+      try {
+        logActivity({ agentId, agentName, type: "task", text: "memulai: " + task.slice(0, 60) });
+        for (const step of chain) {
+          try {
+            const result = await step.run();
+            output = result.text;
+            logActivity({ agentId, agentName, type: "task", text: "selesai via " + step.label });
+            send("complete", {
+              output: result.text,
+              sessionId: result.sessionId ?? "",
+              events: result.events ?? [],
+              via: step.label,
+            });
+          } catch (err: any) {
+            lastError = err;
+            if (req.signal.aborted) throw err;
+            send("event", {
+              type: "info",
+              text: `${step.label} gagal (${err?.message || "error"}) — lanjut ke provider berikutnya...`,
+            });
+            continue;
+          }
+          break;
+        }
+        if (!output) throw lastError ?? new Error("Semua provider gagal");
       } catch (err: any) {
         logActivity({ agentId, agentName, type: "error", text: (err?.message || "bridge gagal").slice(0, 100) });
-        send("error", { message: err?.message || "Hermes bridge gagal", partial: output });
+        send("error", { message: err?.message || "Semua provider gagal", partial: output });
       }
       closed = true;
       clearInterval(heartbeat);
