@@ -239,10 +239,14 @@ export async function POST(req: NextRequest) {
         try {
           result = await runHermesTask(opts);
         } catch (err: any) {
-          if (/HTTP 401/.test(err?.message || "")) {
+          const msg = err?.message || "";
+          if (/HTTP 401/.test(msg)) {
             clearHermesSession();
             send("event", { type: "info", text: "Login Hermes kedaluwarsa — login ulang otomatis..." });
             result = await runHermesTask(opts);
+          } else if (/Rate limit login Hermes/.test(msg)) {
+            send("event", { type: "info", text: "Hermes sedang rate-limit login — tunggu ±1 menit lalu kirim ulang pesanmu." });
+            throw err;
           } else {
             throw err;
           }
