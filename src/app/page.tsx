@@ -174,7 +174,7 @@ export default function Home() {
       {/* MAIN CONTENT AREA */}
       <main className="relative z-20 flex-1 flex flex-col justify-center py-4">
         {viewMode === "brain" ? (
-          <OpsCenter agents={liveAgents} onOpenFullChat={(a) => setExecutingAgent(a)} />
+          <OpsCenter agents={liveAgents} />
         ) : viewMode === "spotlight" ? (
           <div className="animate-fade-in">
             {/* 3D Spotlight Stage */}
