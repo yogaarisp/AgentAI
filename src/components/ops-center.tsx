@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import type { Agent } from "@/lib/agents";
-import { playJarvisChime, speak, stopSpeaking } from "@/lib/tts";
+import { speak, stopSpeaking } from "@/lib/tts";
 
 const ttsStore = {
   listeners: new Set<() => void>(),
@@ -285,7 +285,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     const tryIntro = () => {
       if (introSpokenRef.current) return;
       introSpokenRef.current = true;
-      speak("Hai Keenan. My name is Jarvis.");
+      speak();
     };
     const t = setTimeout(tryIntro, 500);
     const onGesture = () => tryIntro();
@@ -440,7 +440,6 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         ];
         streamIndexRef.current = 0;
         setStreamingStarted(true);
-        if (ttsOnRef.current) playJarvisChime();
       } else {
         const m = feedRef.current[streamIndexRef.current];
         feedRef.current[streamIndexRef.current] = { ...m, text: m.text + t };
@@ -455,7 +454,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         feedRef.current[streamIndexRef.current] = { ...feedRef.current[streamIndexRef.current], text: t };
         setFeed([...feedRef.current]);
       }
-      if (ttsOnRef.current) speak(t);
+      if (ttsOnRef.current) speak();
     };
 
     try {
