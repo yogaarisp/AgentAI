@@ -40,7 +40,7 @@ interface ActivityItem {
   text: string;
 }
 
-const GREETING = "Hai Ayah Kee. I'm KEEMES.";
+const GREETING = "Hai Keenan, I'm Jarvis";
 
 function uid() {
   return Date.now() + "_" + Math.random().toString(36).slice(2, 8);
@@ -222,6 +222,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const [listening, setListening] = useState(false);
   const [clarifyDraft, setClarifyDraft] = useState<Record<string, string>>({});
   const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [mounted, setMounted] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const feedRef = useRef<FeedMsg[]>([]);
   const streamIndexRef = useRef<number>(-1);
@@ -235,6 +236,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   }, []);
 
   useEffect(() => {
+    setMounted(true);
     const t = setInterval(() => setNow(new Date()), 47);
     return () => clearInterval(t);
   }, []);
@@ -444,7 +446,11 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
   const hasPending = feed.some((m) => m.meta?.status === "pending");
   const lastAgent = feed.find((m) => m.role === "agent");
-  const bubbleText = lastAgent ? lastAgent.text : GREETING.slice(0, greetingRevealed);
+  const bubbleText = !mounted
+    ? ""
+    : lastAgent
+      ? lastAgent.text
+      : GREETING.slice(0, greetingRevealed);
   const pad = (n: number, l: number) => String(n).padStart(l, "0");
   const tsLine = `${now.getFullYear()}.${pad(now.getMonth() + 1, 2)}.${pad(now.getDate(), 2)} // ${pad(now.getHours(), 2)}:${pad(now.getMinutes(), 2)}:${pad(now.getSeconds(), 2)}.${pad(now.getMilliseconds(), 3)}`;
 
@@ -459,7 +465,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
             <span className="text-[8px] font-mono text-zinc-500 border border-white/10 px-1.5 py-0.5">CHRONO_LOCK</span>
           </div>
           <p className="text-[8px] font-mono tracking-[0.2em] text-zinc-500 uppercase">System timestamp</p>
-          <p className="text-sm font-mono font-bold text-white">{tsLine}</p>
+          <p className="text-sm font-mono font-bold text-white">{mounted ? tsLine : "----.--.-- // --:--:--.---"}</p>
         </CornerFrame>
 
         <CornerFrame className="p-3">

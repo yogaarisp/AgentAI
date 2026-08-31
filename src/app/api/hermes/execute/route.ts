@@ -218,6 +218,18 @@ export async function POST(req: NextRequest) {
           closed = true;
         }
       };
+      const heartbeat = setInterval(() => {
+        if (closed) {
+          clearInterval(heartbeat);
+          return;
+        }
+        try {
+          controller.enqueue(encoder.encode(": ping\n\n"));
+        } catch {
+          closed = true;
+          clearInterval(heartbeat);
+        }
+      }, 15_000);
       const opts = {
         profile,
         task,
@@ -263,6 +275,7 @@ export async function POST(req: NextRequest) {
         send("error", { message: err?.message || "Hermes bridge gagal", partial: output });
       }
       closed = true;
+      clearInterval(heartbeat);
       try { controller.close(); } catch { /* noop */ }
     },
   });
