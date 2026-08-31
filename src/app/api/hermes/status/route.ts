@@ -17,8 +17,12 @@ export async function GET() {
     });
   } catch (error: any) {
     return NextResponse.json(
-      { success: false, error: error?.message || "Gagal mengambil status Hermes" },
-      { status: 502 }
+      {
+        success: false,
+        error: error?.message || "Gagal mengambil status Hermes",
+        fetchedAt: new Date().toISOString(),
+      },
+      { status: 200 }
     );
   }
 }
