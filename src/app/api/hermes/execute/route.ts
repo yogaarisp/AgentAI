@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getHermesSession, getWsTicket, clearHermesSession } from "@/lib/hermes-server";
 import { setRun, getRun, removeRun } from "@/lib/hermes-gateway-registry";
+import { logActivity } from "@/lib/activity-log";
 
 interface GatewayFrame {
   id?: number | string | null;
@@ -203,6 +204,8 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}) as Record<string, unknown>);
   const profile = String(body.profile || process.env.HERMES_DEFAULT_PROFILE || "devbot");
   const task = String(body.task || "");
+  const agentId = String(body.agentId || profile);
+  const agentName = String(body.agentName || profile);
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -235,6 +238,7 @@ export async function POST(req: NextRequest) {
       };
       let output = "";
       try {
+        logActivity({ agentId, agentName, type: "task", text: "memulai: " + task.slice(0, 60) });
         let result;
         try {
           result = await runHermesTask(opts);
@@ -252,8 +256,10 @@ export async function POST(req: NextRequest) {
           }
         }
         output = result.output;
+        logActivity({ agentId, agentName, type: "task", text: "selesai: " + output.slice(0, 60) });
         send("complete", { output: result.output, sessionId: result.sessionId, events: result.events });
       } catch (err: any) {
+        logActivity({ agentId, agentName, type: "error", text: (err?.message || "bridge gagal").slice(0, 100) });
         send("error", { message: err?.message || "Hermes bridge gagal", partial: output });
       }
       closed = true;

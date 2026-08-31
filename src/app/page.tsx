@@ -5,11 +5,12 @@ import Stage3D from "@/components/stage-3d";
 import AgentDock from "@/components/agent-dock";
 import RosterGridView from "@/components/roster-grid-view";
 import ExecutionTerminalModal from "@/components/execution-terminal-modal";
+import OpsCenter from "@/components/ops-center";
 import { agents, type Agent, type AgentStatus } from "@/lib/agents";
 
 export default function Home() {
   const [activeAgentIndex, setActiveAgentIndex] = useState(0);
-  const [viewMode, setViewMode] = useState<"spotlight" | "roster">("spotlight");
+  const [viewMode, setViewMode] = useState<"brain" | "spotlight" | "roster">("brain");
   const [executingAgent, setExecutingAgent] = useState<Agent | null>(null);
   const [liveRunning, setLiveRunning] = useState<Record<string, boolean>>({});
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
@@ -115,6 +116,16 @@ export default function Home() {
         <div className="flex items-center gap-3">
           <div className="flex items-center rounded-xl bg-white/[0.05] p-1 border border-white/10 text-xs font-mono">
             <button
+              onClick={() => setViewMode("brain")}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                viewMode === "brain"
+                  ? "bg-white/15 text-white font-bold shadow-sm"
+                  : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              Brain
+            </button>
+            <button
               id="view-spotlight-btn"
               onClick={() => setViewMode("spotlight")}
               className={`px-3 py-1.5 rounded-lg transition-all ${
@@ -162,7 +173,9 @@ export default function Home() {
 
       {/* MAIN CONTENT AREA */}
       <main className="relative z-20 flex-1 flex flex-col justify-center py-4">
-        {viewMode === "spotlight" ? (
+        {viewMode === "brain" ? (
+          <OpsCenter agents={liveAgents} onOpenFullChat={(a) => setExecutingAgent(a)} />
+        ) : viewMode === "spotlight" ? (
           <div className="animate-fade-in">
             {/* 3D Spotlight Stage */}
             <Stage3D
