@@ -129,13 +129,21 @@ function RadarSphere({ active }: { active: boolean }) {
     let h = 0;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-    const N = 750;
-    const pts: { x: number; y: number; z: number; s: number; c: number }[] = [];
+    // 320 Partikel 3D: Renggang, elegan, konstelasi bintang
+    const N = 320;
+    const pts: { x: number; y: number; z: number; s: number; c: number; phase: number }[] = [];
     for (let i = 0; i < N; i++) {
       const y = 1 - (i / (N - 1)) * 2;
-      const r = Math.sqrt(1 - y * y);
-      const th = i * 2.399963229728653;
-      pts.push({ x: Math.cos(th) * r, y, z: Math.sin(th) * r, s: 0.6 + Math.random() * 1.4, c: Math.random() });
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const th = i * 2.399963229728653; // Golden angle
+      pts.push({
+        x: Math.cos(th) * r,
+        y,
+        z: Math.sin(th) * r,
+        s: 1.0 + (i % 4 === 0 ? 0.8 : 0.3) + Math.random() * 0.5,
+        c: Math.random(),
+        phase: Math.random() * Math.PI * 2,
+      });
     }
 
     const resize = () => {
@@ -153,79 +161,172 @@ function RadarSphere({ active }: { active: boolean }) {
     const draw = (now: number) => {
       const t = (now - start) / 1000;
       ctx.clearRect(0, 0, w, h);
+
+      // Gunakan dimensi persegi presisi dari dimensi terkecil
+      const size = Math.min(w, h);
       const cx = w / 2;
       const cy = h / 2;
-      const R = Math.min(w, h) * 0.36;
 
-      ctx.setLineDash([3, 7]);
-      ctx.strokeStyle = "rgba(251,191,36,0.28)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(cx, cy, R * 1.08, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, R * 1.02, R * 0.34, -0.5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, R * 1.02, R * 0.34, 0.6, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.strokeStyle = "rgba(251,191,36,0.18)";
-      for (let i = 0; i < 24; i++) {
-        const a = (i / 24) * Math.PI * 2 + t * 0.05;
-        ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(a) * R * 1.08, cy + Math.sin(a) * R * 1.08);
-        ctx.lineTo(cx + Math.cos(a) * R * 1.14, cy + Math.sin(a) * R * 1.14);
-        ctx.stroke();
-      }
-      ctx.setLineDash([2, 6]);
-      ctx.strokeStyle = "rgba(255,255,255,0.12)";
-      ctx.beginPath();
-      ctx.moveTo(cx - R * 1.18, cy);
-      ctx.lineTo(cx + R * 1.18, cy);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(cx, cy - R * 1.18);
-      ctx.lineTo(cx, cy + R * 1.18);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      // Radius utama proporsional & simetris
+      const R = size * 0.44;
+      const sphereR = R * 0.58;
+      const hudR = R * 0.95;
+      const speedMult = active ? 1.6 : 1.0;
 
-      const rotY = t * 0.14;
-      const cY = Math.cos(rotY);
-      const sY = Math.sin(rotY);
-      const tilt = 0.35 + Math.sin(t * 0.1) * 0.06;
-      const cX = Math.cos(tilt);
-      const sX = Math.sin(tilt);
-
-      for (const p of pts) {
-        const x1 = p.x * cY + p.z * sY;
-        const z1 = -p.x * sY + p.z * cY;
-        const y2 = p.y * cX - z1 * sX;
-        const z2 = p.y * sX + z1 * cX;
-        const s = 1 / (2.6 - z2);
-        const px = cx + x1 * R * s;
-        const py = cy - y2 * R * s;
-        const depth = (z2 + 1) / 2;
-        ctx.globalAlpha = 0.15 + depth * 0.75;
-        ctx.fillStyle = p.c > 0.82 ? "#ffffff" : "#fbbf24";
-        ctx.beginPath();
-        ctx.arc(px, py, p.s * (0.5 + depth * 0.9), 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 90);
-      g.addColorStop(0, active ? "rgba(251,191,36,0.22)" : "rgba(251,191,36,0.10)");
-      g.addColorStop(1, "rgba(251,191,36,0)");
-      ctx.fillStyle = g;
+      // ----------------------------------------------------
+      // 1. AMBIENT GLOW
+      // ----------------------------------------------------
+      const pulse = 1 + Math.sin(t * (active ? 3.5 : 1.8)) * 0.03;
+      const haloG = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+      haloG.addColorStop(0, active ? "rgba(245, 158, 11, 0.14)" : "rgba(245, 158, 11, 0.06)");
+      haloG.addColorStop(0.7, active ? "rgba(217, 119, 6, 0.03)" : "rgba(217, 119, 6, 0.01)");
+      haloG.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = haloG;
       ctx.beginPath();
-      ctx.arc(cx, cy, 90, 0, Math.PI * 2);
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = active ? "#fbbf24" : "#a1a1aa";
-      ctx.font = "700 9px ui-monospace, monospace";
+      // ----------------------------------------------------
+      // 2. HUD CALIBRATION RINGS & DEGREE MARKERS
+      // ----------------------------------------------------
+      ctx.save();
+      const hudRot = t * 0.04 * speedMult;
+
+      // Lingkaran terluar tipis putus-putus
+      ctx.setLineDash([3, 7]);
+      ctx.strokeStyle = "rgba(245, 158, 11, 0.22)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, hudR * 1.03, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // 4 Busur Segmen Sudut Berputar
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "rgba(251, 191, 36, 0.5)";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < 4; i++) {
+        const sa = (i * Math.PI) / 2 + hudRot + 0.16;
+        const ea = ((i + 1) * Math.PI) / 2 + hudRot - 0.16;
+        ctx.beginPath();
+        ctx.arc(cx, cy, hudR, sa, ea);
+        ctx.stroke();
+
+        // Ticks di ujung busur
+        for (const ang of [sa, ea]) {
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(ang) * hudR, cy + Math.sin(ang) * hudR);
+          ctx.lineTo(cx + Math.cos(ang) * (hudR + 6), cy + Math.sin(ang) * (hudR + 6));
+          ctx.stroke();
+        }
+      }
+
+      // Label Derajat: 000°, 090°, 180°, 270°
+      const labels = ["000°", "090°", "180°", "270°"];
+      ctx.font = "600 8.5px ui-monospace, monospace";
+      ctx.fillStyle = "rgba(251, 191, 36, 0.85)";
       ctx.textAlign = "center";
-      ctx.fillText(active ? "● THINKING" : "● STANDBY", cx, cy + R * 1.08 + 26);
+      ctx.textBaseline = "middle";
+      for (let i = 0; i < 4; i++) {
+        const midAng = (i * Math.PI) / 2 + hudRot + Math.PI / 4;
+        const lx = cx + Math.cos(midAng) * (hudR * 1.06);
+        const ly = cy + Math.sin(midAng) * (hudR * 1.06);
+        ctx.save();
+        ctx.translate(lx, ly);
+        ctx.rotate(midAng + Math.PI / 2);
+        ctx.fillText(labels[i], 0, 0);
+        ctx.restore();
+      }
+
+      // Inward Ticks
+      ctx.strokeStyle = "rgba(245, 158, 11, 0.3)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2 - hudRot * 0.4;
+        const r1 = hudR * 0.97;
+        const r2 = i % 6 === 0 ? hudR * 0.90 : hudR * 0.93;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+        ctx.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2);
+        ctx.stroke();
+      }
+
+      // Crosshair pusat
+      ctx.setLineDash([3, 7]);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      ctx.beginPath();
+      ctx.moveTo(cx - hudR * 1.05, cy);
+      ctx.lineTo(cx + hudR * 1.05, cy);
+      ctx.moveTo(cx, cy - hudR * 1.05);
+      ctx.lineTo(cx, cy + hudR * 1.05);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // ----------------------------------------------------
+      // 3. ORTHOGRAPHIC 3D SPHERE (Simetris Sempurna)
+      // ----------------------------------------------------
+      // Rotasi hanya sumbu Y (horizontal spin) — TANPA TILT agar bulat sempurna
+      const rotY = t * 0.12 * speedMult;
+      const cosY = Math.cos(rotY);
+      const sinY = Math.sin(rotY);
+
+      const projected: { px: number; py: number; depth: number; s: number; c: number }[] = [];
+      const curR = sphereR * pulse;
+
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const wave = 1 + Math.sin(t * 1.5 + p.phase) * (active ? 0.025 : 0.01);
+        const pr = curR * wave;
+
+        // Rotasi Y saja (orthographic, tanpa perspektif)
+        const rx = p.x * cosY + p.z * sinY;
+        const rz = -p.x * sinY + p.z * cosY;
+        const ry = p.y;
+
+        // Proyeksi Ortografis: px = x, py = -y (TANPA scaling perspektif)
+        const px = cx + rx * pr;
+        const py = cy - ry * pr;
+        const depth = (rz + 1) / 2; // 0 (belakang) → 1 (depan)
+
+        projected.push({ px, py, depth, s: p.s, c: p.c });
+      }
+
+      // Depth sort (belakang dulu, depan terakhir)
+      projected.sort((a, b) => a.depth - b.depth);
+
+      // ----------------------------------------------------
+      // 4. RENDER PARTICLES
+      // ----------------------------------------------------
+      for (let i = 0; i < projected.length; i++) {
+        const p = projected[i];
+        const alpha = Math.max(0.15, Math.min(1, 0.18 + p.depth * 0.82));
+        const radius = p.s * (0.7 + p.depth * 0.7) * (active ? 1.1 : 1.0);
+
+        ctx.globalAlpha = alpha;
+
+        if (p.c > 0.85) {
+          ctx.fillStyle = "#ffffff";
+        } else if (p.c > 0.50) {
+          ctx.fillStyle = "#fef08a";
+        } else if (p.c > 0.20) {
+          ctx.fillStyle = "#fbbf24";
+        } else {
+          ctx.fillStyle = "#f59e0b";
+        }
+
+        ctx.beginPath();
+        ctx.arc(p.px, p.py, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Soft halo untuk bintang depan
+        if (p.depth > 0.78 && p.c > 0.6) {
+          ctx.globalAlpha = alpha * 0.25;
+          ctx.beginPath();
+          ctx.arc(p.px, p.py, radius * 2.0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
 
       raf = requestAnimationFrame(draw);
     };
@@ -236,7 +337,7 @@ function RadarSphere({ active }: { active: boolean }) {
     };
   }, [active]);
 
-  return <canvas ref={canvasRef} className="w-full h-[300px] md:h-[380px] block" />;
+  return <canvas ref={canvasRef} className="w-full aspect-square max-h-[380px] block drop-shadow-[0_0_25px_rgba(245,158,11,0.15)]" />;
 }
 
 export default function OpsCenter({ agents }: { agents: Agent[] }) {
@@ -316,7 +417,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
   useEffect(() => {
     setMounted(true);
-    const t = setInterval(() => setNow(new Date()), 47);
+    const t = setInterval(() => setNow(new Date()), 500);
     return () => clearInterval(t);
   }, []);
 
@@ -569,7 +670,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
       ? lastAgent.text
       : GREETING.slice(0, greetingRevealed);
   const pad = (n: number, l: number) => String(n).padStart(l, "0");
-  const tsLine = `${now.getFullYear()}.${pad(now.getMonth() + 1, 2)}.${pad(now.getDate(), 2)} // ${pad(now.getHours(), 2)}:${pad(now.getMinutes(), 2)}:${pad(now.getSeconds(), 2)}.${pad(now.getMilliseconds(), 3)}`;
+  const tsLine = `${now.getFullYear()}.${pad(now.getMonth() + 1, 2)}.${pad(now.getDate(), 2)} // ${pad(now.getHours(), 2)}:${pad(now.getMinutes(), 2)}:${pad(now.getSeconds(), 2)}`;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[250px_1fr_330px] items-start">
@@ -582,7 +683,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
             <span className="text-[8px] font-mono text-zinc-500 border border-white/10 px-1.5 py-0.5">CHRONO_LOCK</span>
           </div>
           <p className="text-[8px] font-mono tracking-[0.2em] text-zinc-500 uppercase">System timestamp</p>
-          <p className="text-sm font-mono font-bold text-white">{mounted ? tsLine : "----.--.-- // --:--:--.---"}</p>
+          <p className="text-sm font-mono font-bold text-white">{mounted ? tsLine : "----.--.-- // --:--:--"}</p>
         </CornerFrame>
 
         <CornerFrame className="p-3">
@@ -627,7 +728,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         </CornerFrame>
       </div>
 
-      <div className="flex flex-col items-center min-w-0">
+      <div className="flex flex-col items-center justify-between min-w-0 min-h-[580px] h-full pb-2">
         <div className="w-full max-w-xl rounded-xl border border-white/10 bg-black/40 px-5 py-3 text-center mb-3">
           <p className="text-xs font-mono text-white whitespace-pre-wrap break-words">
             {bubbleText || "..."}
@@ -636,154 +737,173 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
         <RadarSphere active={isThinking} />
 
-        <div
-          className={`w-full transition-all duration-500 ease-out flex justify-center mt-5 ${
-            showKeyboard ? "max-w-2xl" : "max-w-xs"
-          }`}
-        >
-          {!showKeyboard ? (
-            /* Mode Default: 3 Tombol Utama (TTS, Voice Input, Keyboard) */
-            <div
-              className={`inline-flex items-center gap-3 px-4 py-2.5 rounded-full border bg-black/80 backdrop-blur-xl shadow-[0_0_20px_rgba(245,158,11,0.15)] transition-all duration-300 ${
-                listening ? "border-red-400/60 ring-2 ring-red-400/20" : "border-amber-500/50 hover:border-amber-400/80"
-              }`}
-            >
-              {/* Button 1: TTS Toggle */}
-              <button
-                onClick={() => setTts(!ttsOn)}
-                className={`relative size-10 rounded-full flex items-center justify-center transition-all ${
-                  ttsOn
-                    ? "text-amber-400 bg-amber-500/15 border border-amber-500/30 shadow-[0_0_12px_rgba(245,158,11,0.2)]"
-                    : "text-zinc-500 hover:text-zinc-300 bg-white/[0.03] border border-white/10"
+        <div className="w-full flex flex-col items-center mt-auto">
+          {/* Status Indicator Text Tepat Di Atas Dock (Dekat & Presisi) */}
+          <div className="flex items-center gap-2 mb-2 text-[9px] font-mono tracking-[0.15em] text-zinc-400">
+            <span
+              className={`size-1.5 rounded-full ${isThinking ? "bg-amber-400 animate-ping" : "bg-zinc-500"
                 }`}
-                title={ttsOn ? "TTS Aktif — klik untuk nonaktifkan" : "TTS Mute — klik untuk aktifkan"}
-              >
-                <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
-                </svg>
-                {!ttsOn && <span className="absolute w-[2px] h-6 bg-zinc-400 rotate-45 rounded-full" />}
-              </button>
+            />
+            <span className={isThinking ? "text-amber-400 font-bold" : "text-zinc-400"}>
+              {isThinking ? "NEURAL_MATRIX // PROCESSING" : "STANDBY"}
+            </span>
+          </div>
 
-              {/* Button 2: Voice Input */}
-              <button
-                onClick={startVoice}
-                className={`relative size-11 rounded-full flex items-center justify-center transition-all ${
-                  listening
-                    ? "text-red-400 bg-red-500/20 border-2 border-red-500 animate-pulse shadow-[0_0_16px_rgba(239,68,68,0.4)]"
-                    : "text-amber-400 hover:text-amber-300 bg-amber-500/10 border border-amber-500/40 hover:border-amber-400 hover:bg-amber-500/20 shadow-[0_0_12px_rgba(245,158,11,0.15)]"
-                }`}
-                title="Voice input — tekan untuk bicara"
+          <div
+            className={`w-full transition-all duration-500 ease-out flex justify-center ${showKeyboard ? "max-w-xl" : "max-w-xs"
+              }`}
+          >
+            {!showKeyboard ? (
+              /* Mode Default: 3 Tombol Lingkaran Versi Kompak (TTS, Voice Input, Terminal/Command) */
+              <div
+                className={`inline-flex items-center gap-2 p-1.5 rounded-full border-[1.5px] bg-black/90 backdrop-blur-2xl shadow-[0_0_25px_rgba(245,158,11,0.2)] transition-all duration-300 ${listening ? "border-red-500/80 ring-2 ring-red-500/20" : "border-amber-500/80 hover:border-amber-400"
+                  }`}
               >
-                <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-                </svg>
-                {listening && (
-                  <span className="absolute -top-1 -right-1 size-3 rounded-full bg-red-500 animate-ping" />
+                {/* Button 1: TTS Toggle (Speaker with Sound Waves) */}
+                <button
+                  onClick={() => setTts(!ttsOn)}
+                  className={`relative size-9 rounded-full border-[1.5px] flex items-center justify-center transition-all ${ttsOn
+                      ? "border-amber-500/80 bg-amber-950/40 text-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.25)] hover:bg-amber-500/20"
+                      : "border-zinc-700 bg-black/40 text-zinc-600 hover:text-zinc-400"
+                    }`}
+                  title={ttsOn ? "TTS Aktif — klik untuk mute" : "TTS Mute — klik untuk aktifkan"}
+                >
+                  <svg className="size-4 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                  </svg>
+                  {!ttsOn && <span className="absolute w-[1.5px] h-5 bg-zinc-400 rotate-45 rounded-full" />}
+                </button>
+
+                {/* Button 2: Voice Input (Microphone with Stand) */}
+                <button
+                  onClick={startVoice}
+                  className={`relative size-9 rounded-full border-[1.5px] flex items-center justify-center transition-all ${listening
+                      ? "border-red-500 bg-red-500/25 text-red-400 animate-pulse shadow-[0_0_16px_rgba(239,68,68,0.5)]"
+                      : "border-amber-500/80 bg-amber-950/40 text-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.25)] hover:bg-amber-500/20 hover:scale-105"
+                    }`}
+                  title="Voice input — tekan untuk bicara"
+                >
+                  <svg className={`size-4 ${listening ? "text-red-400" : "text-amber-400"}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" x2="12" y1="19" y2="22" />
+                    <line x1="8" x2="16" y1="22" y2="22" />
+                  </svg>
+                  {listening && (
+                    <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-red-500 animate-ping" />
+                  )}
+                </button>
+
+                {/* Button 3: Command Prompt Trigger (>_ Icon) */}
+                <button
+                  onClick={() => setShowKeyboard(true)}
+                  className="size-9 rounded-full border-[1.5px] border-amber-500/80 bg-amber-950/40 hover:bg-amber-500/20 text-amber-400 flex items-center justify-center transition-all shadow-[0_0_10px_rgba(245,158,11,0.25)] hover:scale-105"
+                  title="Ketik perintah (Command Prompt)"
+                >
+                  <svg className="size-4 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <rect width="18" height="18" x="3" y="3" rx="4" />
+                    <path d="m8 9 3 3-3 3" />
+                    <path d="M13 15h3" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              /* Mode Keyboard Aktif: Full Command Bar dengan Animasi Slide Kompak */
+              <div
+                className={`w-full flex items-center gap-2 rounded-full border-[1.5px] bg-black/90 backdrop-blur-2xl px-3 py-1.5 transition-all duration-300 shadow-[0_0_25px_rgba(245,158,11,0.2)] ${listening ? "border-red-500/80" : "border-amber-500/80"
+                  }`}
+              >
+                {/* TTS Button di dalam bar */}
+                <button
+                  onClick={() => setTts(!ttsOn)}
+                  className={`size-8 shrink-0 rounded-full flex items-center justify-center transition-all ${ttsOn
+                      ? "text-amber-400 bg-amber-950/60 border border-amber-500/40"
+                      : "text-zinc-600 hover:text-zinc-400 bg-white/[0.03]"
+                    }`}
+                  title={ttsOn ? "TTS aktif" : "TTS mute"}
+                >
+                  <svg className="size-3.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                  </svg>
+                  {!ttsOn && <span className="absolute w-[1.5px] h-4 bg-zinc-500 rotate-45 rounded-full" />}
+                </button>
+
+                {/* Voice Button di dalam bar */}
+                <button
+                  onClick={startVoice}
+                  className={`size-8 shrink-0 rounded-full flex items-center justify-center transition-all ${listening ? "text-red-400 bg-red-400/20" : "text-zinc-400 hover:text-amber-400"
+                    }`}
+                  title="Voice input"
+                >
+                  <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" x2="12" y1="19" y2="22" />
+                    <line x1="8" x2="16" y1="22" y2="22" />
+                  </svg>
+                </button>
+
+                {/* Tombol Collapse / Tutup Keyboard (>_ Icon) */}
+                <button
+                  onClick={() => setShowKeyboard(false)}
+                  className="size-7.5 shrink-0 rounded-full flex items-center justify-center text-amber-400/80 hover:text-amber-300 transition-colors"
+                  title="Tutup (atau tekan Esc)"
+                >
+                  <svg className="size-3.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                    <rect width="18" height="18" x="3" y="3" rx="4" />
+                    <path d="m8 9 3 3-3 3" />
+                    <path d="M13 15h3" />
+                  </svg>
+                </button>
+
+                <span className="w-px h-5 bg-white/15 mx-0.5 shrink-0" />
+                <span className="text-xs font-mono font-bold text-amber-400 select-none shrink-0">&gt;</span>
+
+                {/* Text input field */}
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !isThinking && !hasPending) sendMessage();
+                    if (e.key === "Escape") setShowKeyboard(false);
+                  }}
+                  disabled={hasPending}
+                  placeholder="Type your command..."
+                  className="flex-1 min-w-0 bg-transparent text-xs font-mono text-white placeholder-zinc-500 focus:outline-none disabled:opacity-50 px-1.5"
+                />
+
+                {/* Processing indicator */}
+                {isThinking && (
+                  <span className="flex items-center gap-[2px] mr-1 shrink-0" title="memproses">
+                    {[0, 1, 2, 3].map((i) => (
+                      <span
+                        key={i}
+                        className="w-[2.5px] h-3 rounded bg-amber-400 animate-pulse"
+                        style={{ animationDelay: `${i * 140}ms` }}
+                      />
+                    ))}
+                  </span>
                 )}
-              </button>
 
-              {/* Button 3: Keyboard Trigger */}
-              <button
-                onClick={() => setShowKeyboard(true)}
-                className="size-10 rounded-full flex items-center justify-center text-amber-400 hover:text-amber-300 bg-amber-500/10 border border-amber-500/30 hover:border-amber-400 hover:bg-amber-500/20 transition-all shadow-[0_0_12px_rgba(245,158,11,0.15)]"
-                title="Ketik perintah (Keyboard)"
-              >
-                <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
-                </svg>
-              </button>
-            </div>
-          ) : (
-            /* Mode Keyboard Aktif: Full Command Bar dengan Animasi Slide */
-            <div
-              className={`w-full flex items-center gap-2 rounded-full border bg-black/80 backdrop-blur-xl px-3 py-2 transition-all duration-300 shadow-[0_0_30px_rgba(245,158,11,0.2)] ${
-                listening ? "border-red-400/70" : "border-amber-500/80"
-              }`}
-            >
-              {/* TTS Button di dalam bar */}
-              <button
-                onClick={() => setTts(!ttsOn)}
-                className={`size-9 shrink-0 rounded-full flex items-center justify-center transition-all ${
-                  ttsOn
-                    ? "text-amber-400 bg-amber-950/60 border border-amber-500/40"
-                    : "text-zinc-600 hover:text-zinc-400 bg-white/[0.03]"
-                }`}
-                title={ttsOn ? "TTS aktif" : "TTS mute"}
-              >
-                <svg className="size-4.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
-                </svg>
-                {!ttsOn && <span className="absolute w-[2px] h-5 bg-zinc-500 rotate-45 rounded-full" />}
-              </button>
-
-              {/* Voice Button di dalam bar */}
-              <button
-                onClick={startVoice}
-                className={`size-9 shrink-0 rounded-full flex items-center justify-center transition-all ${
-                  listening ? "text-red-400 bg-red-400/20" : "text-zinc-400 hover:text-white"
-                }`}
-                title="Voice input"
-              >
-                <svg className="size-4.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-                </svg>
-              </button>
-
-              {/* Tombol Keyboard (klik untuk collapse kembali) */}
-              <button
-                onClick={() => setShowKeyboard(false)}
-                className="size-8 shrink-0 rounded-full flex items-center justify-center text-amber-400/80 hover:text-amber-300 transition-colors"
-                title="Tutup keyboard (atau tekan Esc)"
-              >
-                <svg className="size-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
-                </svg>
-              </button>
-
-              <span className="w-px h-5 bg-white/15 mx-1 shrink-0" />
-              <span className="text-xs font-mono text-amber-400 select-none shrink-0">&gt;</span>
-
-              {/* Text input field */}
-              <input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !isThinking && !hasPending) sendMessage();
-                  if (e.key === "Escape") setShowKeyboard(false);
-                }}
-                disabled={hasPending}
-                placeholder="Type your command..."
-                className="flex-1 min-w-0 bg-transparent text-sm font-mono text-white placeholder-zinc-500 focus:outline-none disabled:opacity-50 px-2"
-              />
-
-              {/* Processing indicator */}
-              {isThinking && (
-                <span className="flex items-center gap-[3px] mr-2 shrink-0" title="memproses">
-                  {[0, 1, 2, 3].map((i) => (
-                    <span
-                      key={i}
-                      className="w-[3px] h-4 rounded bg-amber-400 animate-pulse"
-                      style={{ animationDelay: `${i * 140}ms` }}
-                    />
-                  ))}
-                </span>
-              )}
-
-              {/* SEND / STOP Button */}
-              <button
-                onClick={isThinking ? () => abortRef.current?.abort() : () => sendMessage()}
-                disabled={(!isThinking && !input.trim()) || hasPending}
-                className={`shrink-0 px-5 py-2 rounded-full text-xs font-mono font-bold tracking-wider uppercase transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-md ${
-                  isThinking
-                    ? "bg-red-500 text-white hover:bg-red-400"
-                    : "bg-amber-600 text-black hover:bg-amber-500"
-                }`}
-              >
-                {isThinking ? "STOP" : "SEND"}
-              </button>
-            </div>
-          )}
+                {/* SEND / STOP Button */}
+                <button
+                  onClick={isThinking ? () => abortRef.current?.abort() : () => sendMessage()}
+                  disabled={(!isThinking && !input.trim()) || hasPending}
+                  className={`shrink-0 px-4 py-1.5 rounded-full text-[11px] font-mono font-bold tracking-wider uppercase transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-md ${isThinking
+                      ? "bg-red-500 text-white hover:bg-red-400"
+                      : "bg-amber-600 text-black hover:bg-amber-500"
+                    }`}
+                >
+                  {isThinking ? "STOP" : "SEND"}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -800,9 +920,8 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
             <div key={m.id} className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-2">
               <div className="flex items-center justify-between mb-1">
                 <span
-                  className={`text-[8px] font-mono font-bold tracking-[0.15em] uppercase ${
-                    m.role === "user" ? "text-amber-400" : m.role === "agent" ? "text-emerald-400" : "text-cyan-300/70"
-                  }`}
+                  className={`text-[8px] font-mono font-bold tracking-[0.15em] uppercase ${m.role === "user" ? "text-amber-400" : m.role === "agent" ? "text-emerald-400" : "text-cyan-300/70"
+                    }`}
                 >
                   {m.role === "user" ? "KEENAN" : m.role === "agent" ? "KEETECH_AI" : m.role.toUpperCase()}
                 </span>
