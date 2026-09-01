@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { agents } from "@/lib/agents";
 
-type ProviderKind = "gemini" | "openai-compatible";
+type ProviderKind = "gemini" | "openai-compatible" | "nine-router";
 
 interface EntryForm {
   provider: ProviderKind;
@@ -17,11 +17,29 @@ interface EntryForm {
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com";
 const GEMINI_MODEL = "gemini-3.6-flash";
+const NINE_ROUTER_BASE = "https://api.9router.com/v1";
+
+const PROVIDER_LABELS: Record<ProviderKind, string> = {
+  gemini: "Gemini (Google AI Studio)",
+  "openai-compatible": "OpenAI-compatible",
+  "nine-router": "Nine Router",
+};
+
+/** nine-router dieksekusi jalur OpenAI-compatible (Bearer + /models). */
+function wireProtocol(p: ProviderKind): "gemini" | "openai-compatible" {
+  return p === "gemini" ? "gemini" : "openai-compatible";
+}
+
+function defaultBase(p: ProviderKind): string {
+  if (p === "gemini") return GEMINI_BASE;
+  if (p === "nine-router") return NINE_ROUTER_BASE;
+  return "https://api.openai.com/v1";
+}
 
 function emptyEntry(provider: ProviderKind = "gemini"): EntryForm {
   return {
     provider,
-    baseUrl: provider === "gemini" ? GEMINI_BASE : "https://api.openai.com/v1",
+    baseUrl: defaultBase(provider),
     apiKey: "",
     model: provider === "gemini" ? GEMINI_MODEL : "",
   };
@@ -35,17 +53,21 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<Record<string, { ok: boolean; text: string }>>({});
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
+  const [modelLists, setModelLists] = useState<Record<string, string[]>>({});
+  const [loadingModels, setLoadingModels] = useState<string | null>(null);
+  const [modelMsg, setModelMsg] = useState<Record<string, string>>({});
+
+  const fromServer = (e: EntryForm): EntryForm => ({ ...e, maskedKey: e.apiKey, apiKey: "" });
 
   useEffect(() => {
     fetch("/api/settings", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
         if (d.success) {
-          const p = d.settings.primary;
-          setPrimary({ ...p, apiKey: "" });
+          setPrimary(fromServer(d.settings.primary));
           const pa: Record<string, EntryForm> = {};
           for (const [id, e] of Object.entries(d.settings.perAgent ?? {}) as [string, EntryForm][]) {
-            pa[id] = { ...e, apiKey: "" };
+            pa[id] = fromServer(e);
           }
           setPerAgent(pa);
         }
@@ -54,15 +76,20 @@ export default function SettingsPage() {
   }, []);
 
   const keyPlaceholder = (e: EntryForm) =>
-    e.hasKey ? `tersimpan: ${e.maskedKey} — kosongkan jika tidak diubah` : "tempel API key di sini";
+    e.hasKey ? `tersimpan: ${e.maskedKey ?? "••••"} — kosongkan jika tidak diubah` : "tempel API key di sini";
 
   const save = async () => {
     setSaving(true);
     setSaveMsg(null);
     try {
-      const payload: { primary: EntryForm; perAgent: Record<string, EntryForm> } = { primary, perAgent: {} };
+      // nine-router dieksekusi lewat jalur OpenAI-compatible di server.
+      const mapEntry = (e: EntryForm): EntryForm => ({ ...e, provider: wireProtocol(e.provider) });
+      const payload: { primary: EntryForm; perAgent: Record<string, EntryForm> } = {
+        primary: mapEntry(primary),
+        perAgent: {},
+      };
       for (const [id, e] of Object.entries(perAgent)) {
-        if (e.apiKey || e.hasKey) payload.perAgent[id] = e;
+        if (e.apiKey || e.hasKey) payload.perAgent[id] = mapEntry(e);
       }
       const res = await fetch("/api/settings", {
         method: "POST",
@@ -72,11 +99,10 @@ export default function SettingsPage() {
       const d = await res.json();
       if (d.success) {
         setSaveMsg({ ok: true, text: "Settings tersimpan." });
-        const p = d.settings.primary;
-        setPrimary({ ...p, apiKey: "" });
+        setPrimary(fromServer(d.settings.primary));
         const pa: Record<string, EntryForm> = {};
         for (const [id, e] of Object.entries(d.settings.perAgent ?? {}) as [string, EntryForm][]) {
-          pa[id] = { ...e, apiKey: "" };
+          pa[id] = fromServer(e);
         }
         setPerAgent(pa);
       } else {
@@ -96,7 +122,7 @@ export default function SettingsPage() {
       const res = await fetch("/api/settings/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slot, ...entry }),
+        body: JSON.stringify({ slot, ...entry, provider: wireProtocol(entry.provider) }),
       });
       const d = await res.json();
       setTestMsg((m) => ({
@@ -115,6 +141,51 @@ export default function SettingsPage() {
     }
   };
 
+  /** Muat daftar model dari provider — URL + key dikirim ke server (bebas CORS). */
+  const loadModels = async (slot: string, entry: EntryForm) => {
+    setLoadingModels(slot);
+    setModelMsg((m) => ({ ...m, [slot]: "" }));
+    try {
+      const res = await fetch("/api/settings/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slot,
+          provider: wireProtocol(entry.provider),
+          baseUrl: entry.baseUrl || defaultBase(entry.provider),
+          apiKey: entry.apiKey,
+        }),
+      });
+      const d = await res.json();
+      if (d.success && Array.isArray(d.models) && d.models.length) {
+        setModelLists((m) => ({ ...m, [slot]: d.models }));
+        // Auto-pilih model default kalau slot belum punya model.
+        if (!entry.model) {
+          const preferred =
+            d.models.find((n: string) => n.includes("3.6-flash")) ??
+            d.models.find((n: string) => n.includes("flash")) ??
+            d.models[0];
+          applyModel(slot, entry, preferred);
+        }
+      } else {
+        setModelLists((m) => ({ ...m, [slot]: [] }));
+        setModelMsg((m) => ({ ...m, [slot]: d.error || "Tidak ada model ditemukan" }));
+      }
+    } catch (err: unknown) {
+      setModelMsg((m) => ({ ...m, [slot]: err instanceof Error ? err.message : "gagal memuat model" }));
+    } finally {
+      setLoadingModels(null);
+    }
+  };
+
+  const applyModel = (slot: string, entry: EntryForm, model: string) => {
+    if (slot === "primary") {
+      setPrimary((p) => ({ ...p, model }));
+    } else {
+      setPerAgent((m) => ({ ...m, [slot]: { ...entry, model } }));
+    }
+  };
+
   const updatePrimary = (patch: Partial<EntryForm>) => setPrimary((p) => ({ ...p, ...patch }));
   const updateAgent = (id: string, patch: Partial<EntryForm>) =>
     setPerAgent((m) => ({ ...m, [id]: { ...(m[id] ?? emptyEntry()), ...patch } }));
@@ -123,74 +194,115 @@ export default function SettingsPage() {
     "w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs font-mono text-white placeholder-zinc-600 focus:border-amber-400/50 focus:outline-none";
   const labelCls = "mb-1 block text-[10px] font-mono font-bold tracking-[0.15em] text-zinc-500 uppercase";
 
-  const providerFields = (slot: string, entry: EntryForm, onChange: (p: Partial<EntryForm>) => void) => (
-    <div className="space-y-3">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label className={labelCls}>Provider</label>
-          <select
-            value={entry.provider}
-            onChange={(e) => onChange({ provider: e.target.value as ProviderKind })}
-            className={inputCls}
-          >
-            <option value="gemini">Gemini (Google AI Studio)</option>
-            <option value="openai-compatible">OpenAI-compatible</option>
-          </select>
+  const providerFields = (slot: string, entry: EntryForm, onChange: (p: Partial<EntryForm>) => void) => {
+    const isGemini = entry.provider === "gemini";
+    const models = modelLists[slot];
+    return (
+      <div className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className={labelCls}>Provider</label>
+            <select
+              value={entry.provider}
+              onChange={(e) => {
+                const p = e.target.value as ProviderKind;
+                onChange({ provider: p, baseUrl: defaultBase(p), model: p === "gemini" ? GEMINI_MODEL : "" });
+                setModelLists((m) => ({ ...m, [slot]: [] }));
+              }}
+              className={inputCls}
+            >
+              {(Object.keys(PROVIDER_LABELS) as ProviderKind[]).map((p) => (
+                <option key={p} value={p}>
+                  {PROVIDER_LABELS[p]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Model</label>
+            {models && models.length ? (
+              <select
+                value={entry.model}
+                onChange={(e) => onChange({ model: e.target.value })}
+                className={inputCls}
+              >
+                {!entry.model && <option value="">— pilih model —</option>}
+                {models.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={entry.model}
+                onChange={(e) => onChange({ model: e.target.value })}
+                placeholder={isGemini ? GEMINI_MODEL : "isi key lalu klik MUAT MODEL"}
+                className={inputCls}
+              />
+            )}
+          </div>
         </div>
-        <div>
-          <label className={labelCls}>Model</label>
-          <input
-            value={entry.model}
-            onChange={(e) => onChange({ model: e.target.value })}
-            placeholder={entry.provider === "gemini" ? GEMINI_MODEL : "misal: gpt-4o-mini"}
-            className={inputCls}
-          />
-        </div>
-      </div>
-      <div>
-        <label className={labelCls}>Base URL</label>
-        <input
-          value={entry.baseUrl}
-          onChange={(e) => onChange({ baseUrl: e.target.value })}
-          placeholder={entry.provider === "gemini" ? GEMINI_BASE : "https://api.openai.com/v1"}
-          className={inputCls}
-        />
-      </div>
-      <div>
-        <label className={labelCls}>API Key</label>
-        <div className="flex gap-2">
-          <input
-            type={showKey[slot] ? "text" : "password"}
-            value={entry.apiKey}
-            onChange={(e) => onChange({ apiKey: e.target.value })}
-            placeholder={keyPlaceholder(entry)}
-            className={inputCls}
-          />
-          <button
-            onClick={() => setShowKey((m) => ({ ...m, [slot]: !m[slot] }))}
-            className="rounded-lg border border-white/10 px-2 text-[10px] font-mono text-zinc-400 hover:text-white"
-            title="tampilkan/sembunyikan"
-          >
-            {showKey[slot] ? "HIDE" : "SHOW"}
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => testSlot(slot, entry)}
-          disabled={testing === slot}
-          className="rounded-lg border border-cyan-400/40 px-3 py-1.5 text-[10px] font-mono font-bold tracking-widest text-cyan-300 hover:bg-cyan-400/10 disabled:opacity-40"
-        >
-          {testing === slot ? "TESTING..." : "TEST KONEKSI"}
-        </button>
-        {testMsg[slot] && (
-          <span className={`text-[10px] font-mono ${testMsg[slot].ok ? "text-emerald-400" : "text-red-400"}`}>
-            {testMsg[slot].text}
-          </span>
+
+        {!isGemini && (
+          <div>
+            <label className={labelCls}>Base URL</label>
+            <input
+              value={entry.baseUrl}
+              onChange={(e) => onChange({ baseUrl: e.target.value })}
+              placeholder={defaultBase(entry.provider)}
+              className={inputCls}
+            />
+          </div>
         )}
+
+        <div>
+          <label className={labelCls}>API Key</label>
+          <div className="flex gap-2">
+            <input
+              type={showKey[slot] ? "text" : "password"}
+              value={entry.apiKey}
+              onChange={(e) => onChange({ apiKey: e.target.value })}
+              placeholder={keyPlaceholder(entry)}
+              className={inputCls}
+            />
+            <button
+              onClick={() => setShowKey((m) => ({ ...m, [slot]: !m[slot] }))}
+              className="rounded-lg border border-white/10 px-2 text-[10px] font-mono text-zinc-400 hover:text-white"
+              title="tampilkan/sembunyikan"
+            >
+              {showKey[slot] ? "HIDE" : "SHOW"}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => loadModels(slot, entry)}
+            disabled={loadingModels === slot}
+            className="rounded-lg border border-violet-400/40 px-3 py-1.5 text-[10px] font-mono font-bold tracking-widest text-violet-300 hover:bg-violet-400/10 disabled:opacity-40"
+          >
+            {loadingModels === slot ? "MEMUAT..." : "MUAT MODEL"}
+          </button>
+          <button
+            onClick={() => testSlot(slot, entry)}
+            disabled={testing === slot}
+            className="rounded-lg border border-cyan-400/40 px-3 py-1.5 text-[10px] font-mono font-bold tracking-widest text-cyan-300 hover:bg-cyan-400/10 disabled:opacity-40"
+          >
+            {testing === slot ? "TESTING..." : "TEST KONEKSI"}
+          </button>
+          {modelMsg[slot] && (
+            <span className="text-[10px] font-mono text-red-400">{modelMsg[slot]}</span>
+          )}
+          {testMsg[slot] && (
+            <span className={`text-[10px] font-mono ${testMsg[slot].ok ? "text-emerald-400" : "text-red-400"}`}>
+              {testMsg[slot].text}
+            </span>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="relative min-h-screen bg-[#08080a] text-zinc-100 selection:bg-amber-500/30">
