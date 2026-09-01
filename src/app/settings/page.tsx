@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { agents } from "@/lib/agents";
 
@@ -59,21 +59,82 @@ export default function SettingsPage() {
 
   const fromServer = (e: EntryForm): EntryForm => ({ ...e, maskedKey: e.apiKey, apiKey: "" });
 
+  const applyModel = useCallback((slot: string, entry: EntryForm, model: string) => {
+    if (slot === "primary") {
+      setPrimary((p) => ({ ...p, model }));
+    } else {
+      setPerAgent((m) => ({ ...m, [slot]: { ...entry, model } }));
+    }
+  }, []);
+
+  /** Muat daftar model dari provider — URL + key dikirim ke server (bebas CORS). */
+  const loadModels = useCallback(
+    async (slot: string, entry: EntryForm) => {
+      setLoadingModels(slot);
+      setModelMsg((m) => ({ ...m, [slot]: "" }));
+      try {
+        const res = await fetch("/api/settings/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slot,
+            provider: wireProtocol(entry.provider),
+            baseUrl: entry.baseUrl || defaultBase(entry.provider),
+            apiKey: entry.apiKey,
+          }),
+        });
+        const d = await res.json();
+        if (d.success && Array.isArray(d.models) && d.models.length) {
+          setModelLists((m) => ({ ...m, [slot]: d.models }));
+          // Auto-pilih model default kalau slot belum punya model.
+          if (!entry.model) {
+            const preferred =
+              d.models.find((n: string) => n.includes("3.6-flash")) ??
+              d.models.find((n: string) => n.includes("flash")) ??
+              d.models[0];
+            applyModel(slot, entry, preferred);
+          }
+        } else {
+          setModelLists((m) => ({ ...m, [slot]: [] }));
+          setModelMsg((m) => ({ ...m, [slot]: d.error || "Tidak ada model ditemukan" }));
+        }
+      } catch (err: unknown) {
+        setModelMsg((m) => ({ ...m, [slot]: err instanceof Error ? err.message : "gagal memuat model" }));
+      } finally {
+        setLoadingModels(null);
+      }
+    },
+    [applyModel]
+  );
+
+  const autoLoadModels = useCallback(
+    (slot: string, entry: EntryForm) => {
+      if (entry.apiKey.trim() || entry.hasKey) void loadModels(slot, entry);
+    },
+    [loadModels]
+  );
+
   useEffect(() => {
     fetch("/api/settings", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
         if (d.success) {
-          setPrimary(fromServer(d.settings.primary));
+          const p = fromServer(d.settings.primary);
+          setPrimary(p);
           const pa: Record<string, EntryForm> = {};
           for (const [id, e] of Object.entries(d.settings.perAgent ?? {}) as [string, EntryForm][]) {
             pa[id] = fromServer(e);
           }
           setPerAgent(pa);
+          // Slot yang sudah punya key tersimpan langsung muat daftar model.
+          if (p.hasKey) void loadModels("primary", p);
+          for (const [id, e] of Object.entries(pa)) {
+            if (e.hasKey) void loadModels(id, e);
+          }
         }
       })
       .catch(() => {});
-  }, []);
+  }, [loadModels]);
 
   const keyPlaceholder = (e: EntryForm) =>
     e.hasKey ? `tersimpan: ${e.maskedKey ?? "••••"} — kosongkan jika tidak diubah` : "tempel API key di sini";
@@ -141,51 +202,6 @@ export default function SettingsPage() {
     }
   };
 
-  /** Muat daftar model dari provider — URL + key dikirim ke server (bebas CORS). */
-  const loadModels = async (slot: string, entry: EntryForm) => {
-    setLoadingModels(slot);
-    setModelMsg((m) => ({ ...m, [slot]: "" }));
-    try {
-      const res = await fetch("/api/settings/models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          slot,
-          provider: wireProtocol(entry.provider),
-          baseUrl: entry.baseUrl || defaultBase(entry.provider),
-          apiKey: entry.apiKey,
-        }),
-      });
-      const d = await res.json();
-      if (d.success && Array.isArray(d.models) && d.models.length) {
-        setModelLists((m) => ({ ...m, [slot]: d.models }));
-        // Auto-pilih model default kalau slot belum punya model.
-        if (!entry.model) {
-          const preferred =
-            d.models.find((n: string) => n.includes("3.6-flash")) ??
-            d.models.find((n: string) => n.includes("flash")) ??
-            d.models[0];
-          applyModel(slot, entry, preferred);
-        }
-      } else {
-        setModelLists((m) => ({ ...m, [slot]: [] }));
-        setModelMsg((m) => ({ ...m, [slot]: d.error || "Tidak ada model ditemukan" }));
-      }
-    } catch (err: unknown) {
-      setModelMsg((m) => ({ ...m, [slot]: err instanceof Error ? err.message : "gagal memuat model" }));
-    } finally {
-      setLoadingModels(null);
-    }
-  };
-
-  const applyModel = (slot: string, entry: EntryForm, model: string) => {
-    if (slot === "primary") {
-      setPrimary((p) => ({ ...p, model }));
-    } else {
-      setPerAgent((m) => ({ ...m, [slot]: { ...entry, model } }));
-    }
-  };
-
   const updatePrimary = (patch: Partial<EntryForm>) => setPrimary((p) => ({ ...p, ...patch }));
   const updateAgent = (id: string, patch: Partial<EntryForm>) =>
     setPerAgent((m) => ({ ...m, [id]: { ...(m[id] ?? emptyEntry()), ...patch } }));
@@ -227,6 +243,9 @@ export default function SettingsPage() {
                 className={inputCls}
               >
                 {!entry.model && <option value="">— pilih model —</option>}
+                {entry.model && !models.includes(entry.model) && (
+                  <option value={entry.model}>{entry.model} (saat ini)</option>
+                )}
                 {models.map((n) => (
                   <option key={n} value={n}>
                     {n}
@@ -250,6 +269,7 @@ export default function SettingsPage() {
             <input
               value={entry.baseUrl}
               onChange={(e) => onChange({ baseUrl: e.target.value })}
+              onBlur={() => autoLoadModels(slot, entry)}
               placeholder={defaultBase(entry.provider)}
               className={inputCls}
             />
@@ -263,6 +283,7 @@ export default function SettingsPage() {
               type={showKey[slot] ? "text" : "password"}
               value={entry.apiKey}
               onChange={(e) => onChange({ apiKey: e.target.value })}
+              onBlur={() => autoLoadModels(slot, entry)}
               placeholder={keyPlaceholder(entry)}
               className={inputCls}
             />

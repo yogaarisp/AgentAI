@@ -70,7 +70,7 @@ interface ActivityItem {
   text: string;
 }
 
-const GREETING = "Hai Keenan, I'm Jarvis";
+const GREETING = "Hai Keenan, I'm Keetech";
 
 function uid() {
   return Date.now() + "_" + Math.random().toString(36).slice(2, 8);
@@ -285,7 +285,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     const tryIntro = () => {
       if (introSpokenRef.current) return;
       introSpokenRef.current = true;
-      speak("Hai Keenan. My name is Jarvis.");
+      speak("Hai Keenan. My name is Keetech.");
     };
     const t = setTimeout(tryIntro, 500);
     const onGesture = () => tryIntro();
@@ -707,7 +707,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
                     m.role === "user" ? "text-amber-400" : m.role === "agent" ? "text-emerald-400" : "text-cyan-300/70"
                   }`}
                 >
-                  {m.role === "user" ? "KEENAN" : m.role === "agent" ? "KEEMES_AI" : m.role.toUpperCase()}
+                  {m.role === "user" ? "KEENAN" : m.role === "agent" ? "KEETECH_AI" : m.role.toUpperCase()}
                 </span>
                 <span className="text-[8px] font-mono text-zinc-600">
                   {new Date(m.ts).toLocaleTimeString("id-ID", { hour12: false })}
