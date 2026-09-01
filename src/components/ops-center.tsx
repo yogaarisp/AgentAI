@@ -247,6 +247,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const [greetingRevealed, setGreetingRevealed] = useState(0);
   const [feed, setFeed] = useState<FeedMsg[]>([]);
   const [input, setInput] = useState("");
+  const [showKeyboard, setShowKeyboard] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [streamingStarted, setStreamingStarted] = useState(false);
   const [listening, setListening] = useState(false);
@@ -261,6 +262,14 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const ttsOnRef = useRef(true);
   const introSpokenRef = useRef(false);
+
+  // Auto focus input saat keyboard dibuka
+  useEffect(() => {
+    if (showKeyboard) {
+      const t = setTimeout(() => inputRef.current?.focus(), 150);
+      return () => clearTimeout(t);
+    }
+  }, [showKeyboard]);
 
   const ttsOn = useSyncExternalStore(
     ttsStore.subscribe,
@@ -628,66 +637,153 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         <RadarSphere active={isThinking} />
 
         <div
-          className={`w-full max-w-xl mt-5 flex items-center gap-1 rounded-2xl border bg-black/60 backdrop-blur px-2 py-2 transition-all focus-within:border-amber-400/50 ${
-            listening ? "border-red-400/50" : "border-white/10"
+          className={`w-full transition-all duration-500 ease-out flex justify-center mt-5 ${
+            showKeyboard ? "max-w-2xl" : "max-w-xs"
           }`}
         >
-          <button
-            onClick={() => setTts(!ttsOn)}
-            className={`relative size-9 shrink-0 rounded-xl flex items-center justify-center transition-colors ${
-              ttsOn ? "text-amber-400 bg-amber-400/10" : "text-zinc-600 hover:text-zinc-400"
-            }`}
-            title={ttsOn ? "TTS aktif — klik untuk matikan" : "TTS mati — klik untuk nyalakan"}
-          >
-            <svg className="size-4.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
-            </svg>
-            {!ttsOn && <span className="absolute w-[2px] h-5 bg-zinc-500 rotate-45 rounded-full" />}
-          </button>
-          <button
-            onClick={startVoice}
-            className={`size-9 shrink-0 rounded-xl flex items-center justify-center transition-colors ${
-              listening ? "text-red-400 bg-red-400/10" : "text-zinc-500 hover:text-white"
-            }`}
-            title="Voice input — langsung terkirim"
-          >
-            <svg className="size-4.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-            </svg>
-          </button>
-          <span className="w-px h-5 bg-white/10 mx-1 shrink-0" />
-          <span className="text-xs font-mono text-amber-400 select-none shrink-0">&gt;</span>
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !isThinking && !hasPending) sendMessage();
-            }}
-            disabled={hasPending}
-            placeholder="Type your command..."
-            className="flex-1 min-w-0 bg-transparent text-sm font-mono text-white placeholder-zinc-600 focus:outline-none disabled:opacity-50 px-1"
-          />
-          {isThinking && (
-            <span className="flex items-center gap-[3px] mr-2 shrink-0" title="memproses">
-              {[0, 1, 2, 3].map((i) => (
-                <span
-                  key={i}
-                  className="w-[3px] h-4 rounded bg-amber-400 animate-pulse"
-                  style={{ animationDelay: `${i * 140}ms` }}
-                />
-              ))}
-            </span>
+          {!showKeyboard ? (
+            /* Mode Default: 3 Tombol Utama (TTS, Voice Input, Keyboard) */
+            <div
+              className={`inline-flex items-center gap-3 px-4 py-2.5 rounded-full border bg-black/80 backdrop-blur-xl shadow-[0_0_20px_rgba(245,158,11,0.15)] transition-all duration-300 ${
+                listening ? "border-red-400/60 ring-2 ring-red-400/20" : "border-amber-500/50 hover:border-amber-400/80"
+              }`}
+            >
+              {/* Button 1: TTS Toggle */}
+              <button
+                onClick={() => setTts(!ttsOn)}
+                className={`relative size-10 rounded-full flex items-center justify-center transition-all ${
+                  ttsOn
+                    ? "text-amber-400 bg-amber-500/15 border border-amber-500/30 shadow-[0_0_12px_rgba(245,158,11,0.2)]"
+                    : "text-zinc-500 hover:text-zinc-300 bg-white/[0.03] border border-white/10"
+                }`}
+                title={ttsOn ? "TTS Aktif — klik untuk nonaktifkan" : "TTS Mute — klik untuk aktifkan"}
+              >
+                <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
+                </svg>
+                {!ttsOn && <span className="absolute w-[2px] h-6 bg-zinc-400 rotate-45 rounded-full" />}
+              </button>
+
+              {/* Button 2: Voice Input */}
+              <button
+                onClick={startVoice}
+                className={`relative size-11 rounded-full flex items-center justify-center transition-all ${
+                  listening
+                    ? "text-red-400 bg-red-500/20 border-2 border-red-500 animate-pulse shadow-[0_0_16px_rgba(239,68,68,0.4)]"
+                    : "text-amber-400 hover:text-amber-300 bg-amber-500/10 border border-amber-500/40 hover:border-amber-400 hover:bg-amber-500/20 shadow-[0_0_12px_rgba(245,158,11,0.15)]"
+                }`}
+                title="Voice input — tekan untuk bicara"
+              >
+                <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                </svg>
+                {listening && (
+                  <span className="absolute -top-1 -right-1 size-3 rounded-full bg-red-500 animate-ping" />
+                )}
+              </button>
+
+              {/* Button 3: Keyboard Trigger */}
+              <button
+                onClick={() => setShowKeyboard(true)}
+                className="size-10 rounded-full flex items-center justify-center text-amber-400 hover:text-amber-300 bg-amber-500/10 border border-amber-500/30 hover:border-amber-400 hover:bg-amber-500/20 transition-all shadow-[0_0_12px_rgba(245,158,11,0.15)]"
+                title="Ketik perintah (Keyboard)"
+              >
+                <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            /* Mode Keyboard Aktif: Full Command Bar dengan Animasi Slide */
+            <div
+              className={`w-full flex items-center gap-2 rounded-full border bg-black/80 backdrop-blur-xl px-3 py-2 transition-all duration-300 shadow-[0_0_30px_rgba(245,158,11,0.2)] ${
+                listening ? "border-red-400/70" : "border-amber-500/80"
+              }`}
+            >
+              {/* TTS Button di dalam bar */}
+              <button
+                onClick={() => setTts(!ttsOn)}
+                className={`size-9 shrink-0 rounded-full flex items-center justify-center transition-all ${
+                  ttsOn
+                    ? "text-amber-400 bg-amber-950/60 border border-amber-500/40"
+                    : "text-zinc-600 hover:text-zinc-400 bg-white/[0.03]"
+                }`}
+                title={ttsOn ? "TTS aktif" : "TTS mute"}
+              >
+                <svg className="size-4.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
+                </svg>
+                {!ttsOn && <span className="absolute w-[2px] h-5 bg-zinc-500 rotate-45 rounded-full" />}
+              </button>
+
+              {/* Voice Button di dalam bar */}
+              <button
+                onClick={startVoice}
+                className={`size-9 shrink-0 rounded-full flex items-center justify-center transition-all ${
+                  listening ? "text-red-400 bg-red-400/20" : "text-zinc-400 hover:text-white"
+                }`}
+                title="Voice input"
+              >
+                <svg className="size-4.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                </svg>
+              </button>
+
+              {/* Tombol Keyboard (klik untuk collapse kembali) */}
+              <button
+                onClick={() => setShowKeyboard(false)}
+                className="size-8 shrink-0 rounded-full flex items-center justify-center text-amber-400/80 hover:text-amber-300 transition-colors"
+                title="Tutup keyboard (atau tekan Esc)"
+              >
+                <svg className="size-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
+                </svg>
+              </button>
+
+              <span className="w-px h-5 bg-white/15 mx-1 shrink-0" />
+              <span className="text-xs font-mono text-amber-400 select-none shrink-0">&gt;</span>
+
+              {/* Text input field */}
+              <input
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !isThinking && !hasPending) sendMessage();
+                  if (e.key === "Escape") setShowKeyboard(false);
+                }}
+                disabled={hasPending}
+                placeholder="Type your command..."
+                className="flex-1 min-w-0 bg-transparent text-sm font-mono text-white placeholder-zinc-500 focus:outline-none disabled:opacity-50 px-2"
+              />
+
+              {/* Processing indicator */}
+              {isThinking && (
+                <span className="flex items-center gap-[3px] mr-2 shrink-0" title="memproses">
+                  {[0, 1, 2, 3].map((i) => (
+                    <span
+                      key={i}
+                      className="w-[3px] h-4 rounded bg-amber-400 animate-pulse"
+                      style={{ animationDelay: `${i * 140}ms` }}
+                    />
+                  ))}
+                </span>
+              )}
+
+              {/* SEND / STOP Button */}
+              <button
+                onClick={isThinking ? () => abortRef.current?.abort() : () => sendMessage()}
+                disabled={(!isThinking && !input.trim()) || hasPending}
+                className={`shrink-0 px-5 py-2 rounded-full text-xs font-mono font-bold tracking-wider uppercase transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-md ${
+                  isThinking
+                    ? "bg-red-500 text-white hover:bg-red-400"
+                    : "bg-amber-600 text-black hover:bg-amber-500"
+                }`}
+              >
+                {isThinking ? "STOP" : "SEND"}
+              </button>
+            </div>
           )}
-          <button
-            onClick={isThinking ? () => abortRef.current?.abort() : () => sendMessage()}
-            disabled={(!isThinking && !input.trim()) || hasPending}
-            className={`shrink-0 px-4 py-2 rounded-xl text-[11px] font-mono font-bold tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-              isThinking ? "bg-red-500 text-white hover:bg-red-400" : "bg-amber-500 text-black hover:bg-amber-400"
-            }`}
-          >
-            {isThinking ? "STOP" : "SEND"}
-          </button>
         </div>
       </div>
 
