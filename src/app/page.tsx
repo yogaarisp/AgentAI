@@ -1,5 +1,8 @@
 "use client";
 
+// Halaman ini live dashboard — jangan di-SSG/cache server agar update selalu tampil.
+export const dynamic = "force-dynamic";
+
 import { useState, useEffect, useMemo } from "react";
 import Stage3D from "@/components/stage-3d";
 import AgentDock from "@/components/agent-dock";
