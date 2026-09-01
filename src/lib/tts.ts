@@ -1,19 +1,18 @@
 /**
- * TTS Jarvis — bilingual per-kalimat.
+ * TTS Jarvis — ElevenLabs utama, browser TTS sebagai fallback.
  *
- * Balasan sering campur Bahasa Indonesia + Inggris. speak(text) membelah
- * teks jadi kalimat, mendeteksi bahasa tiap kalimat, lalu:
- * - Kalimat Inggris → voice Jarvis (Daniel / UK male) — karakter utama.
- * - Kalimat Indonesia → voice Bahasa Indonesia yang tersedia di sistem
- *   (prioritas pria: Microsoft Ardi/Andika), supaya pengucapan natural.
- *   Kalau device tidak punya voice Indonesia, kalimat ID pun tetap pakai
- *   voice Jarvis (fallback aman, tanpa pernah pilih voice acak).
+ * speak(text):
+ * 1. POST /api/tts (server memanggil ElevenLabs, voice George — British male
+ *    ala Jarvis, multilingual: ID & EN natural). Key hanya di server.
+ * 2. Kalau ElevenLabs gagal/quota habis → fallback ke speechSynthesis browser
+ *    dengan pembacaan bilingual per-kalimat (voice Jarvis untuk EN,
+ *    voice ID pria untuk ID).
  *
- * playJarvisChime(): 5-jarvis.mp3 HANYA sebagai chime saat agent mulai
- * menjawab — bukan untuk membacakan teks.
+ * playJarvisChime(): 5-jarvis.mp3 HANYA sebagai chime saat agent mulai menjawab.
  */
 
 let jarvisAudio: HTMLAudioElement | null = null;
+let ttsAudio: HTMLAudioElement | null = null;
 
 export function playJarvisChime() {
   try {
@@ -30,6 +29,7 @@ export function playJarvisChime() {
 
 export function stopSpeaking() {
   try {
+    ttsAudio?.pause();
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   } catch {
     /* ignore */
@@ -99,21 +99,18 @@ function splitSentences(text: string): string[] {
     .filter(Boolean);
 }
 
-export function speak(text: string) {
+/** Fallback: speechSynthesis browser, bilingual per-kalimat. */
+function speakBrowser(text: string) {
   if (!("speechSynthesis" in window)) return;
-  const clean = cleanForSpeech(text).slice(0, 600);
-  if (!clean) return;
   const synth = window.speechSynthesis;
   synth.cancel();
   const jarvis = pickJarvisVoice();
   const idVoice = pickIdVoice();
-  const sentences = splitSentences(clean).slice(0, 40);
+  const sentences = splitSentences(text).slice(0, 40);
   if (!sentences.length) return;
 
-  // speechSynthesis otomatis mengantre utterance berurutan.
   for (const sentence of sentences) {
     const isId = detectLang(sentence) === "id";
-    // Kalimat ID pakai voice ID hanya jika ada; kalau tidak, tetap Jarvis.
     const voice = isId ? idVoice ?? jarvis : jarvis;
     const utter = new SpeechSynthesisUtterance(sentence);
     if (voice) {
@@ -126,4 +123,33 @@ export function speak(text: string) {
     utter.pitch = 0.9;
     synth.speak(utter);
   }
+}
+
+async function speakElevenLabs(text: string): Promise<boolean> {
+  try {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      cache: "no-store",
+    });
+    if (!res.ok) return false;
+    const blob = await res.blob();
+    if (!blob.type.startsWith("audio")) return false;
+    if (!ttsAudio) ttsAudio = new Audio();
+    ttsAudio.src = URL.createObjectURL(blob);
+    ttsAudio.volume = 1;
+    await ttsAudio.play();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function speak(text: string) {
+  const clean = cleanForSpeech(text).slice(0, 900);
+  if (!clean) return;
+  stopSpeaking();
+  const ok = await speakElevenLabs(clean);
+  if (!ok) speakBrowser(clean);
 }
