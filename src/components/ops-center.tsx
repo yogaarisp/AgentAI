@@ -627,48 +627,33 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
         <RadarSphere active={isThinking} />
 
-        <div className="flex items-center gap-4 mt-4 mb-3">
-          <button
-            onClick={() => setTts(!ttsOn)}
-            className={`relative size-12 rounded-full border flex items-center justify-center transition-all ${
-              ttsOn
-                ? "border-amber-400/40 text-amber-400 hover:bg-amber-400/10"
-                : "border-white/10 text-zinc-600 hover:text-zinc-400"
-            }`}
-            title={ttsOn ? "TTS aktif — klik untuk matikan" : "TTS mati — klik untuk nyalakan"}
-          >
-            <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
-            </svg>
-            {!ttsOn && <span className="absolute w-[2px] h-6 bg-zinc-500 rotate-45 rounded-full" />}
-          </button>
+        {/* Command bar — satu pill: controls inline + input + send */}
+        <div
+          className={`w-full max-w-xl flex items-center gap-2.5 rounded-2xl border bg-[#0c0c0e]/90 backdrop-blur px-3.5 py-2.5 mt-5 mb-3 transition-colors duration-300 ${
+            listening || isThinking
+              ? "border-amber-400/50 shadow-[0_0_24px_-6px_rgba(251,191,36,0.35)]"
+              : "border-white/10 hover:border-amber-400/30"
+          }`}
+        >
+          {/* Mic */}
           <button
             onClick={startVoice}
-            className={`size-12 rounded-full border border-amber-400/40 flex items-center justify-center text-amber-400 hover:bg-amber-400/10 transition-all ${listening ? "animate-pulse bg-amber-400/20" : ""}`}
-            title="Voice input"
+            className={`shrink-0 size-8 rounded-xl flex items-center justify-center transition-all ${
+              listening
+                ? "bg-amber-400/20 text-amber-300 animate-pulse"
+                : "text-zinc-500 hover:text-amber-300 hover:bg-white/5"
+            }`}
+            title="Voice input — bicara langsung terkirim"
           >
-            <svg className="size-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <svg className="size-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
             </svg>
           </button>
-          <button
-            onClick={() => inputRef.current?.focus()}
-            className="size-14 rounded-full border-2 border-amber-400/70 flex items-center justify-center text-amber-400 hover:bg-amber-400/10 transition-all"
-            title="Ketik perintah"
-          >
-            <svg className="size-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
-            </svg>
-          </button>
-          <div className={`size-12 rounded-full border border-amber-400/40 flex items-center justify-center gap-[3px] ${isThinking ? "text-amber-400" : "text-zinc-600"}`}>
-            {[0, 1, 2, 3].map((i) => (
-              <span key={i} className={`w-[3px] rounded bg-current ${isThinking ? "animate-pulse" : ""}`} style={{ height: isThinking ? 16 : 10, animationDelay: `${i * 120}ms` }} />
-            ))}
-          </div>
-        </div>
 
-        <div className="w-full max-w-xl flex items-center gap-2 rounded-xl border border-amber-400/25 bg-black/50 px-4 py-2.5">
-          <span className="text-xs font-mono text-amber-400">&gt;</span>
+          <span className="shrink-0 w-px h-5 bg-white/10" />
+
+          {/* Input */}
+          <span className="shrink-0 text-xs font-mono text-amber-400">&gt;</span>
           <input
             ref={inputRef}
             value={input}
@@ -677,15 +662,53 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
               if (e.key === "Enter" && !isThinking && !hasPending) sendMessage();
             }}
             disabled={hasPending}
-            placeholder="Type your command..."
-            className="flex-1 bg-transparent text-xs font-mono text-white placeholder-zinc-600 focus:outline-none disabled:opacity-50"
+            placeholder={listening ? "Mendengarkan..." : "Type your command..."}
+            className="flex-1 min-w-0 bg-transparent text-xs font-mono text-white placeholder-zinc-600 focus:outline-none disabled:opacity-50"
           />
+
+          {/* Thinking indicator */}
+          {isThinking && (
+            <div className="shrink-0 flex items-center gap-[2.5px] px-1" title="Agent sedang berpikir">
+              {[0, 1, 2].map((i) => (
+                <span key={i} className="w-1 h-1 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: `${i * 150}ms` }} />
+              ))}
+            </div>
+          )}
+
+          {/* TTS toggle */}
+          <button
+            onClick={() => setTts(!ttsOn)}
+            className={`relative shrink-0 size-8 rounded-xl flex items-center justify-center transition-all ${
+              ttsOn ? "text-amber-300/80 hover:bg-amber-400/10" : "text-zinc-600 hover:text-zinc-400"
+            }`}
+            title={ttsOn ? "TTS aktif — klik untuk matikan" : "TTS mati — klik untuk nyalakan"}
+          >
+            <svg className="size-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
+            </svg>
+            {!ttsOn && <span className="absolute w-3.5 h-[1.5px] bg-current rotate-45 rounded-full" />}
+          </button>
+
+          {/* Send / Stop */}
           <button
             onClick={isThinking ? () => abortRef.current?.abort() : () => sendMessage()}
             disabled={(!isThinking && !input.trim()) || hasPending}
-            className={`px-4 py-1.5 rounded-lg text-[11px] font-mono font-bold transition-all disabled:opacity-40 ${isThinking ? "bg-red-500 text-white" : "bg-amber-500/80 text-black hover:bg-amber-400"}`}
+            className={`shrink-0 size-9 rounded-xl flex items-center justify-center font-mono text-[10px] font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+              isThinking
+                ? "bg-red-500 text-white hover:bg-red-400"
+                : "bg-amber-500 text-black hover:bg-amber-400 shadow-[0_0_16px_-4px_rgba(251,191,36,0.5)]"
+            }`}
+            title={isThinking ? "Stop" : "Send (Enter)"}
           >
-            {isThinking ? "STOP" : "SEND"}
+            {isThinking ? (
+              <svg className="size-3.5" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            ) : (
+              <svg className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+              </svg>
+            )}
           </button>
         </div>
       </div>
