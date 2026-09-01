@@ -1,12 +1,16 @@
 /**
- * TTS Jarvis — membacakan teks dengan KARAKTER VOKAL Jarvis (pria Inggris,
- * ala 5-jarvis.mp3) untuk SEMUA bahasa, tanpa pernah pindah ke voice lain.
+ * TTS Jarvis — bilingual per-kalimat.
  *
- * - speak(text): membacakan teks pakai voice Jarvis yang dikunci
- *   (Daniel / Google UK English Male / Microsoft Ryan, dst).
- *   Tidak ada lagi deteksi bahasa → tidak akan suara cewek Indonesia lagi.
- * - playJarvisChime(): memutar 5-jarvis.mp3 HANYA sebagai chime saat agent
- *   mulai menjawab — bukan untuk membacakan teks.
+ * Balasan sering campur Bahasa Indonesia + Inggris. speak(text) membelah
+ * teks jadi kalimat, mendeteksi bahasa tiap kalimat, lalu:
+ * - Kalimat Inggris → voice Jarvis (Daniel / UK male) — karakter utama.
+ * - Kalimat Indonesia → voice Bahasa Indonesia yang tersedia di sistem
+ *   (prioritas pria: Microsoft Ardi/Andika), supaya pengucapan natural.
+ *   Kalau device tidak punya voice Indonesia, kalimat ID pun tetap pakai
+ *   voice Jarvis (fallback aman, tanpa pernah pilih voice acak).
+ *
+ * playJarvisChime(): 5-jarvis.mp3 HANYA sebagai chime saat agent mulai
+ * menjawab — bukan untuk membacakan teks.
  */
 
 let jarvisAudio: HTMLAudioElement | null = null;
@@ -32,7 +36,7 @@ export function stopSpeaking() {
   }
 }
 
-/** Voice ala Jarvis — urutan prioritas, kunci ke pria Inggris. */
+/** Voice ala Jarvis — pria Inggris. */
 const JARVIS_VOICE_HINTS = [
   "Daniel",
   "Google UK English Male",
@@ -44,15 +48,31 @@ const JARVIS_VOICE_HINTS = [
   "Google US English",
 ];
 
-function pickVoice(): SpeechSynthesisVoice | null {
-  const voices = window.speechSynthesis.getVoices();
+/** Voice Bahasa Indonesia — prioritas pria agar karakter tetap "Jarvis". */
+const ID_VOICE_HINTS = ["Ardi", "Andika", "Google Bahasa Indonesia", "Indonesian"];
+
+function getVoices(): SpeechSynthesisVoice[] {
+  return "speechSynthesis" in window ? window.speechSynthesis.getVoices() : [];
+}
+
+function pickJarvisVoice(): SpeechSynthesisVoice | null {
+  const voices = getVoices();
   if (!voices.length) return null;
   for (const hint of JARVIS_VOICE_HINTS) {
     const v = voices.find((x) => x.name.includes(hint));
     if (v) return v;
   }
-  // fallback: voice Inggris apa pun (jangan pernah voice id/female)
   return voices.find((v) => v.lang.toLowerCase().startsWith("en")) ?? voices[0];
+}
+
+function pickIdVoice(): SpeechSynthesisVoice | null {
+  const voices = getVoices();
+  if (!voices.length) return null;
+  for (const hint of ID_VOICE_HINTS) {
+    const v = voices.find((x) => x.name.includes(hint));
+    if (v) return v;
+  }
+  return voices.find((v) => v.lang.toLowerCase().startsWith("id")) ?? null;
 }
 
 function cleanForSpeech(text: string): string {
@@ -64,21 +84,46 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
+/** Kata kunci penanda Bahasa Indonesia. */
+const ID_WORD =
+  /(^|\s)(yang|dan|adalah|tidak|sudah|akan|bisa|untuk|dengan|kami|saya|anda|juga|pada|atau|ini|itu|telah|harus|kok|jangan|banyak|karena|kalau|jika|semua|belum|masih|dari)([\s.,!?]|$)/i;
+
+function detectLang(sentence: string): "id" | "en" {
+  return ID_WORD.test(sentence) ? "id" : "en";
+}
+
+/** Pecah jadi kalimat — tanpa regex lookbehind (kompatibel Safari lama). */
+function splitSentences(text: string): string[] {
+  return (text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [text])
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function speak(text: string) {
   if (!("speechSynthesis" in window)) return;
   const clean = cleanForSpeech(text).slice(0, 600);
   if (!clean) return;
   const synth = window.speechSynthesis;
   synth.cancel();
-  const utter = new SpeechSynthesisUtterance(clean);
-  const voice = pickVoice();
-  if (voice) {
-    utter.voice = voice;
-    utter.lang = voice.lang;
-  } else {
-    utter.lang = "en-US";
+  const jarvis = pickJarvisVoice();
+  const idVoice = pickIdVoice();
+  const sentences = splitSentences(clean).slice(0, 40);
+  if (!sentences.length) return;
+
+  // speechSynthesis otomatis mengantre utterance berurutan.
+  for (const sentence of sentences) {
+    const isId = detectLang(sentence) === "id";
+    // Kalimat ID pakai voice ID hanya jika ada; kalau tidak, tetap Jarvis.
+    const voice = isId ? idVoice ?? jarvis : jarvis;
+    const utter = new SpeechSynthesisUtterance(sentence);
+    if (voice) {
+      utter.voice = voice;
+      utter.lang = voice.lang;
+    } else {
+      utter.lang = isId ? "id-ID" : "en-US";
+    }
+    utter.rate = 1.02;
+    utter.pitch = 0.9;
+    synth.speak(utter);
   }
-  utter.rate = 1.02;
-  utter.pitch = 0.9;
-  synth.speak(utter);
 }
