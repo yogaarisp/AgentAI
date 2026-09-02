@@ -14,6 +14,8 @@ export interface Agent {
   status: AgentStatus;
   hermesProfileKey: string;
   hermesProfileUrl: string;
+  /** ElevenLabs voice ID untuk TTS karakter agent ini */
+  elevenlabsVoiceId: string;
   themeColor: {
     primary: string;
     hex: string;
@@ -48,6 +50,8 @@ export const agents: Agent[] = [
     quote: "Directs the hive mind with absolute precision.",
     hermesProfileKey: "keehermes",
     hermesProfileUrl: "https://hermes.keetech.my.id/profiles?profile=keehermes",
+    // Daniel — British male, steady & authoritative (CEO orchestrator)
+    elevenlabsVoiceId: "onwK4e9ZLuTAKqWW03F9",
     capabilities: [
       "Orchestrates and routes multi-agent workflows with zero latency",
       "Direct socket link to Keehermes (Hermes) backend core",
@@ -87,6 +91,8 @@ export const agents: Agent[] = [
     quote: "Puts the brand on page one — and keeps it there.",
     hermesProfileKey: "kirana",
     hermesProfileUrl: "https://hermes.keetech.my.id/profiles?profile=kirana",
+    // Jessica — Playful, bright, warm (SEO/content persona Kirana)
+    elevenlabsVoiceId: "cgSgspJ2msm6clMCkdW9",
     capabilities: [
       "Full keyword research, clustering & SERP intent mapping",
       "Technical SEO audits: Core Web Vitals, schema & crawl health",
@@ -126,6 +132,8 @@ export const agents: Agent[] = [
     quote: "Turns complex architecture into clean production code in seconds.",
     hermesProfileKey: "keedev",
     hermesProfileUrl: "https://hermes.keetech.my.id/profiles?profile=keedev",
+    // Brian — Deep, resonant, comforting (developer/architect persona)
+    elevenlabsVoiceId: "nPczCjzI2devNBz1zQrb",
     capabilities: [
       "End-to-end fullstack code generation & architectural scaffolding",
       "Automated unit testing, linting & self-healing bug detection",
@@ -165,6 +173,8 @@ export const agents: Agent[] = [
     quote: "Guarantees 99.99% uptime with autonomous auto-healing clusters.",
     hermesProfileKey: "keeinfra",
     hermesProfileUrl: "https://hermes.keetech.my.id/profiles?profile=keeinfra",
+    // Callum — Husky, trickster, confident (infra/SRE persona)
+    elevenlabsVoiceId: "N2lVS1w4EtoT3dr4eOWO",
     capabilities: [
       "Kubernetes cluster provisioning & auto-scaling node pools",
       "Edge caching, CDN routing & DDoS mitigations",
@@ -204,6 +214,8 @@ export const agents: Agent[] = [
     quote: "Optimizes cloud spend, forecasting, and automated balance audits.",
     hermesProfileKey: "keefin",
     hermesProfileUrl: "https://hermes.keetech.my.id/profiles?profile=keefin",
+    // Bill — Wise, mature, balanced (finance/quant persona)
+    elevenlabsVoiceId: "pqHfZKP75CvOlQylNhV4",
     capabilities: [
       "Real-time multi-cloud cost intelligence & waste elimination",
       "Predictive financial runway modeling & cash flow forecasting",

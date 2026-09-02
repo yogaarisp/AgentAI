@@ -36,15 +36,33 @@ export function stopSpeaking() {
   }
 }
 
-/** Voice ala Jarvis — pria Inggris. */
+/**
+ * Voice ala Jarvis — pria Inggris / pria US.
+ * Urutan prioritas: macOS built-in male → Google male → Microsoft male → fallback EN.
+ * macOS voices: Daniel (UK), Aaron, Fred, Gordon, Ralph, Reed, Rishi, Rocko, Sandy apalagi
+ * hindari: Karen, Samantha, Moira, Tessa, Victoria, Fiona (semua perempuan).
+ */
 const JARVIS_VOICE_HINTS = [
-  "Daniel",
+  // macOS — cowok
+  "Daniel",   // macOS UK English male — paling mirip Jarvis
+  "Aaron",    // macOS US English male
+  "Fred",     // macOS US English male
+  "Gordon",   // macOS UK English male
+  "Ralph",    // macOS US English male
+  "Reed",     // macOS US English male (natural neural)
+  "Rishi",    // macOS Indian English male
+  "Rocko",    // macOS US English male
+  "Eddy",     // macOS US English male
+  "Grandpa",  // macOS US English male
+  "Jester",   // macOS US English male
+  "Zarvox",   // macOS male-ish
+  // Google / Windows
   "Google UK English Male",
   "Microsoft Ryan",
   "Microsoft George",
+  "Microsoft Guy",
   "Arthur",
   "Oliver",
-  "Microsoft Guy",
   "Google US English",
 ];
 
@@ -55,13 +73,34 @@ function getVoices(): SpeechSynthesisVoice[] {
   return "speechSynthesis" in window ? window.speechSynthesis.getVoices() : [];
 }
 
+/** Voice perempuan macOS yang harus dihindari. */
+const FEMALE_VOICE_BLACKLIST = [
+  "Samantha", "Karen", "Moira", "Tessa", "Victoria", "Fiona",
+  "Allison", "Ava", "Kate", "Susan", "Nicky", "Siri",
+  "Google UK English Female",
+];
+
+function isFemaleVoice(v: SpeechSynthesisVoice): boolean {
+  return FEMALE_VOICE_BLACKLIST.some((name) => v.name.includes(name));
+}
+
 function pickJarvisVoice(): SpeechSynthesisVoice | null {
   const voices = getVoices();
   if (!voices.length) return null;
+
+  // 1. Cari berdasarkan hints list (urutan prioritas)
   for (const hint of JARVIS_VOICE_HINTS) {
-    const v = voices.find((x) => x.name.includes(hint));
+    const v = voices.find((x) => x.name.includes(hint) && !isFemaleVoice(x));
     if (v) return v;
   }
+
+  // 2. Fallback: sembarang voice EN yang bukan perempuan
+  const maleFallback = voices.find(
+    (v) => v.lang.toLowerCase().startsWith("en") && !isFemaleVoice(v)
+  );
+  if (maleFallback) return maleFallback;
+
+  // 3. Last resort: voice EN apapun (lebih baik salah gender daripada silent)
   return voices.find((v) => v.lang.toLowerCase().startsWith("en")) ?? voices[0];
 }
 
@@ -120,17 +159,21 @@ function speakBrowser(text: string) {
       utter.lang = isId ? "id-ID" : "en-US";
     }
     utter.rate = 1.02;
-    utter.pitch = 0.9;
+    utter.pitch = 0.75;  // lebih rendah = lebih pria, seperti Jarvis
     synth.speak(utter);
   }
 }
 
-async function speakElevenLabs(text: string): Promise<boolean> {
+async function speakElevenLabs(text: string, voiceId?: string): Promise<boolean> {
   try {
     const res = await fetch("/api/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({
+        text,
+        // voiceId: kosong = server pakai ELEVENLABS_VOICE_ID (George, default KEETECH)
+        ...(voiceId ? { voiceId } : {}),
+      }),
       cache: "no-store",
     });
     if (!res.ok) return false;
@@ -146,10 +189,10 @@ async function speakElevenLabs(text: string): Promise<boolean> {
   }
 }
 
-export async function speak(text: string) {
+export async function speak(text: string, voiceId?: string) {
   const clean = cleanForSpeech(text).slice(0, 900);
   if (!clean) return;
   stopSpeaking();
-  const ok = await speakElevenLabs(clean);
+  const ok = await speakElevenLabs(clean, voiceId);
   if (!ok) speakBrowser(clean);
 }

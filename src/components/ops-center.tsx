@@ -72,6 +72,60 @@ interface ActivityItem {
 
 const GREETING = "Hai Keenan, I'm Keetech";
 
+/**
+ * Deteksi intent user ingin ngobrol dengan agent tertentu.
+ * Mengembalikan agent id yang dimaksud, atau null kalau tidak ada.
+ *
+ * Pola yang didukung (case-insensitive, bahasa Indonesia & Inggris):
+ *   "saya ingin ngobrol dengan kirana"
+ *   "chat dengan keedev"
+ *   "hubungkan ke keeinfra"
+ *   "alihkan ke keefin"
+ *   "switch to keemes"
+ *   "minta bantuan keedev"
+ *   "@kirana ..."
+ */
+function detectAgentIntent(text: string, agentList: Agent[]): Agent | null {
+  const lower = text.toLowerCase();
+
+  // Trigger kata-kata yang menandakan pergantian agent
+  const switchPatterns = [
+    /(?:ingin?|mau|pengen|pengin)\s+(?:ngobrol|chat|bicara|tanya|konsultasi)\s+(?:dengan|sama|ke|dengan)\s+(\w+)/i,
+    /(?:ngobrol|chat|bicara|tanya|konsultasi)\s+(?:dengan|sama|ke)\s+(\w+)/i,
+    /(?:hubungkan?|alihkan?|sambungkan?|pindahkan?|switch(?:\s+to)?|connect(?:\s+to)?)\s+(?:ke\s+)?(\w+)/i,
+    /(?:minta\s+bantuan|tanya)\s+(\w+)/i,
+    /^@(\w+)/i,
+    /(?:dengan|sama)\s+(\w+)\s+(?:dong|deh|ya|tolong|please)/i,
+    /(?:ke|to)\s+(\w+)(?:\s+(?:dong|deh|ya|tolong|please))?$/i,
+  ];
+
+  for (const pattern of switchPatterns) {
+    const match = lower.match(pattern);
+    if (match) {
+      const candidate = match[1].toLowerCase();
+      const found = agentList.find(
+        (a) =>
+          a.id.toLowerCase() === candidate ||
+          a.name.toLowerCase() === candidate ||
+          a.displayName.toLowerCase() === candidate
+      );
+      if (found) return found;
+    }
+  }
+
+  // Fallback: cek apakah nama agent muncul secara eksplisit di awal kalimat
+  // atau dalam frasa "... kirana ..." tanpa konteks task yang jelas
+  const firstWords = lower.split(/\s+/).slice(0, 4).join(" ");
+  for (const agent of agentList) {
+    const names = [agent.id, agent.name, agent.displayName].map((n) => n.toLowerCase());
+    for (const name of names) {
+      if (firstWords.includes(name)) return agent;
+    }
+  }
+
+  return null;
+}
+
 function uid() {
   return Date.now() + "_" + Math.random().toString(36).slice(2, 8);
 }
@@ -340,8 +394,17 @@ function RadarSphere({ active }: { active: boolean }) {
   return <canvas ref={canvasRef} className="w-full aspect-square max-h-[380px] block drop-shadow-[0_0_25px_rgba(245,158,11,0.15)]" />;
 }
 
+// Warna tema KEETECH default (amber/gold) saat belum ada agent dipilih
+const KEETECH_THEME = {
+  hex: "#f59e0b",
+  name: "KEETECH",
+  role: "Central AI",
+};
+
 export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const keemes = agents.find((a) => a.hermesProfileKey === "keehermes") ?? agents[0];
+  // null = belum ada agent dipilih, tampil sebagai KEETECH
+  const [activeAgent, setActiveAgent] = useState<Agent | null>(null);
   const [stats, setStats] = useState<SysStats | null>(null);
   const [statsOk, setStatsOk] = useState(false);
   const [now, setNow] = useState(() => new Date());
@@ -356,6 +419,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [env, setEnv] = useState<{ location: string; weather: string } | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [localAgentOnline, setLocalAgentOnline] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const feedRef = useRef<FeedMsg[]>([]);
   const streamIndexRef = useRef<number>(-1);
@@ -363,6 +427,10 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const ttsOnRef = useRef(true);
   const introSpokenRef = useRef(false);
+  // Refs untuk akses startVoice/stopVoice dari useEffect tanpa stale closure
+  const startVoiceRef = useRef<(() => void) | null>(null);
+  const stopVoiceRef  = useRef<(() => void) | null>(null);
+  const recRef = useRef<any>(null); // instance SpeechRecognition aktif
 
   // Auto focus input saat keyboard dibuka
   useEffect(() => {
@@ -371,6 +439,30 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
       return () => clearTimeout(t);
     }
   }, [showKeyboard]);
+
+  // Spacebar = toggle mic, HANYA saat keyboard mode OFF
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Abaikan kalau keyboard mode ON, atau fokus di input/textarea
+      if (showKeyboard) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      if (e.code === "Space") {
+        e.preventDefault(); // cegah scroll halaman
+        if (!listening) {
+          startVoiceRef.current?.();
+        } else {
+          // Kalau sudah listening, spacebar kedua = stop (biarkan onend handle)
+          stopVoiceRef.current?.();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showKeyboard, listening]);
 
   const ttsOn = useSyncExternalStore(
     ttsStore.subscribe,
@@ -418,6 +510,24 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   useEffect(() => {
     setMounted(true);
     const t = setInterval(() => setNow(new Date()), 500);
+    return () => clearInterval(t);
+  }, []);
+
+  // Poll local agent status setiap 5 detik
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch("/api/agent/status");
+        if (res.ok) {
+          const data = await res.json();
+          setLocalAgentOnline(Boolean(data.online));
+        }
+      } catch {
+        setLocalAgentOnline(false);
+      }
+    };
+    check();
+    const t = setInterval(check, 5_000);
     return () => clearInterval(t);
   }, []);
 
@@ -531,9 +641,24 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     }
   };
 
-  const sendMessage = async (overrideText?: string) => {
+  const sendMessage = async (overrideText?: string, voiceAlternatives?: string[]) => {
     const text = (typeof overrideText === "string" ? overrideText : input).trim();
-    if (!text || isThinking || !keemes) return;
+    if (!text || isThinking) return;
+
+    // --- Agent intent detection ---
+    const intentAgent = detectAgentIntent(text, agents);
+    let targetAgent: Agent = activeAgent ?? keemes; // null = pakai keemes sebagai executor default
+    if (intentAgent && intentAgent.id !== (activeAgent?.id ?? "")) {
+      // Switch agent + reset sesi (sesi Hermes terikat ke profil)
+      setActiveAgent(intentAgent);
+      targetAgent = intentAgent;
+      sessionIdRef.current = null;
+      pushFeed([{
+        role: "sys",
+        text: `Switched to ${intentAgent.displayName} (${intentAgent.role}) — sesi baru dimulai.`,
+      }]);
+    }
+
     const controller = new AbortController();
     abortRef.current = controller;
     setIsThinking(true);
@@ -565,7 +690,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         feedRef.current[streamIndexRef.current] = { ...feedRef.current[streamIndexRef.current], text: t };
         setFeed([...feedRef.current]);
       }
-      if (ttsOnRef.current) speak(t);
+      if (ttsOnRef.current) speak(t, activeAgent?.elevenlabsVoiceId);
     };
 
     try {
@@ -573,10 +698,11 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          agentId: keemes.id,
-          agentName: "KEEMES",
-          profile: "keehermes",
+          agentId: targetAgent.id,
+          agentName: targetAgent.name,
+          profile: targetAgent.hermesProfileKey,
           task: text,
+          voiceAlternatives: voiceAlternatives ?? [],
           sessionId: sessionIdRef.current,
         }),
         signal: controller.signal,
@@ -645,22 +771,82 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const startVoice = () => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
-      pushFeed([{ role: "event", text: "Voice input tidak didukung browser ini." }]);
+      pushFeed([{ role: "event", text: "Voice input tidak didukung browser ini. Gunakan Chrome." }]);
       return;
     }
     const rec = new SR();
+    recRef.current = rec;
     rec.lang = "id-ID";
     rec.interimResults = false;
-    rec.onstart = () => setListening(true);
-    rec.onend = () => setListening(false);
-    rec.onresult = (e: any) => {
-      const t = e.results[0][0].transcript;
-      setInput("");
-      // Auto-send: langsung kirim hasil suara tanpa perlu Enter.
-      void sendMessage(t);
+    rec.maxAlternatives = 5;
+    rec.continuous = false;
+
+    rec.onstart = () => {
+      console.log("[Voice] Mic aktif, mendengarkan...");
+      setListening(true);
     };
-    rec.start();
+
+    rec.onend = () => {
+      console.log("[Voice] Mic berhenti.");
+      setListening(false);
+      recRef.current = null;
+    };
+
+    rec.onspeechstart = () => console.log("[Voice] Suara terdeteksi...");
+    rec.onspeechend  = () => console.log("[Voice] Suara berhenti.");
+
+    rec.onresult = (e: any) => {
+      const alternatives: string[] = [];
+      const result = e.results[0];
+      for (let i = 0; i < result.length; i++) {
+        alternatives.push(result[i].transcript.trim());
+      }
+      console.log("[Voice] Transkripsi:", alternatives);
+      const best = alternatives[0] || "";
+      pushFeed([{ role: "user", text: best }]);
+      setInput("");
+      void sendMessage(best, alternatives);
+    };
+
+    rec.onerror = (e: any) => {
+      console.error("[Voice] Error:", e.error, e.message);
+      setListening(false);
+      recRef.current = null;
+      const errMap: Record<string, string> = {
+        "not-allowed":     "Izin mikrofon ditolak — aktifkan di pengaturan browser.",
+        "no-speech":       "Tidak ada suara terdeteksi, coba lagi.",
+        "audio-capture":   "Mikrofon tidak ditemukan atau sedang dipakai aplikasi lain.",
+        "network":         "Koneksi bermasalah untuk speech recognition.",
+        "aborted":         "Voice input dibatalkan.",
+        "service-not-allowed": "Speech recognition tidak diizinkan di halaman ini.",
+      };
+      const msg = errMap[e.error] || `Voice error: ${e.error}`;
+      pushFeed([{ role: "event", text: msg }]);
+    };
+
+    try {
+      rec.start();
+      console.log("[Voice] rec.start() dipanggil");
+    } catch (err) {
+      console.error("[Voice] Gagal start:", err);
+      pushFeed([{ role: "event", text: `Gagal memulai voice: ${err}` }]);
+      setListening(false);
+    }
   };
+
+  const stopVoice = () => {
+    try {
+      recRef.current?.stop();
+    } catch { /* ignore */ }
+  };
+
+  // Selalu update ref agar useEffect spacebar tidak stale
+  startVoiceRef.current = startVoice;
+  stopVoiceRef.current  = stopVoice;
+
+  const agentThemeHex = activeAgent?.themeColor.hex ?? KEETECH_THEME.hex;
+  const agentDisplayName = activeAgent?.name ?? KEETECH_THEME.name;
+  const agentRole = activeAgent?.role ?? KEETECH_THEME.role;
 
   const hasPending = feed.some((m) => m.meta?.status === "pending");
   const lastAgent = feed.find((m) => m.role === "agent");
@@ -738,15 +924,64 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         <RadarSphere active={isThinking} />
 
         <div className="w-full flex flex-col items-center mt-auto">
-          {/* Status Indicator Text Tepat Di Atas Dock (Dekat & Presisi) */}
-          <div className="flex items-center gap-2 mb-2 text-[9px] font-mono tracking-[0.15em] text-zinc-400">
+          {/* Active Agent Badge */}
+          <div
+            className="flex items-center gap-2 mb-1.5 px-3 py-1 rounded-full border text-[9px] font-mono font-bold tracking-[0.15em] uppercase"
+            style={{
+              borderColor: agentThemeHex + "50",
+              backgroundColor: agentThemeHex + "12",
+              color: agentThemeHex,
+            }}
+          >
             <span
-              className={`size-1.5 rounded-full ${isThinking ? "bg-amber-400 animate-ping" : "bg-zinc-500"
-                }`}
+              className="size-1.5 rounded-full"
+              style={{ backgroundColor: agentThemeHex }}
             />
-            <span className={isThinking ? "text-amber-400 font-bold" : "text-zinc-400"}>
-              {isThinking ? "NEURAL_MATRIX // PROCESSING" : "STANDBY"}
-            </span>
+            {agentDisplayName} · {agentRole}
+            {activeAgent !== null && (
+              <button
+                onClick={() => {
+                  setActiveAgent(null);
+                  sessionIdRef.current = null;
+                  pushFeed([{ role: "sys", text: `Kembali ke KEETECH.` }]);
+                }}
+                className="ml-1 opacity-50 hover:opacity-100 transition-opacity"
+                title="Kembali ke KEETECH"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          {/* Status Indicator Text Tepat Di Atas Dock (Dekat & Presisi) */}
+          <div className="flex items-center gap-3 mb-2 text-[9px] font-mono tracking-[0.15em]">
+            {/* Neural matrix status */}
+            <div className="flex items-center gap-1.5 text-zinc-400">
+              <span
+                className={`size-1.5 rounded-full ${isThinking ? "animate-ping" : ""}`}
+                style={{ backgroundColor: isThinking ? agentThemeHex : "#52525b" }}
+              />
+              <span className={isThinking ? "font-bold" : "text-zinc-400"} style={isThinking ? { color: agentThemeHex } : undefined}>
+                {isThinking ? "NEURAL_MATRIX // PROCESSING" : "STANDBY"}
+              </span>
+            </div>
+            {/* Local agent status dot */}
+            <div
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded border"
+              style={localAgentOnline
+                ? { borderColor: "#22c55e50", backgroundColor: "#22c55e12", color: "#22c55e" }
+                : { borderColor: "#52525b50", backgroundColor: "#52525b12", color: "#52525b" }
+              }
+              title={localAgentOnline ? "Local Agent aktif — laptop dapat dikontrol" : "Local Agent offline — jalankan python3 local_agent.py"}
+            >
+              <span
+                className={`size-1.5 rounded-full ${localAgentOnline ? "animate-pulse" : ""}`}
+                style={{ backgroundColor: localAgentOnline ? "#22c55e" : "#52525b" }}
+              />
+              <span className="text-[8px] font-mono font-bold">
+                {localAgentOnline ? "LOCAL" : "NO_LOCAL"}
+              </span>
+            </div>
           </div>
 
           <div
@@ -756,8 +991,9 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
             {!showKeyboard ? (
               /* Mode Default: 3 Tombol Lingkaran Versi Kompak (TTS, Voice Input, Terminal/Command) */
               <div
-                className={`inline-flex items-center gap-2 p-1.5 rounded-full border-[1.5px] bg-black/90 backdrop-blur-2xl shadow-[0_0_25px_rgba(245,158,11,0.2)] transition-all duration-300 ${listening ? "border-red-500/80 ring-2 ring-red-500/20" : "border-amber-500/80 hover:border-amber-400"
+                className={`inline-flex items-center gap-2 p-1.5 rounded-full border-[1.5px] bg-black/90 backdrop-blur-2xl shadow-[0_0_25px_rgba(245,158,11,0.2)] transition-all duration-300 ${listening ? "border-red-500/80 ring-2 ring-red-500/20" : ""
                   }`}
+                style={!listening ? { borderColor: agentThemeHex + "cc" } : undefined}
               >
                 {/* Button 1: TTS Toggle (Speaker with Sound Waves) */}
                 <button
@@ -778,12 +1014,12 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
                 {/* Button 2: Voice Input (Microphone with Stand) */}
                 <button
-                  onClick={startVoice}
+                  onClick={listening ? stopVoice : startVoice}
                   className={`relative size-9 rounded-full border-[1.5px] flex items-center justify-center transition-all ${listening
                       ? "border-red-500 bg-red-500/25 text-red-400 animate-pulse shadow-[0_0_16px_rgba(239,68,68,0.5)]"
                       : "border-amber-500/80 bg-amber-950/40 text-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.25)] hover:bg-amber-500/20 hover:scale-105"
                     }`}
-                  title="Voice input — tekan untuk bicara"
+                  title={listening ? "Klik atau Space untuk berhenti" : "Voice input — klik atau tekan Space"}
                 >
                   <svg className={`size-4 ${listening ? "text-red-400" : "text-amber-400"}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
@@ -793,6 +1029,10 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
                   </svg>
                   {listening && (
                     <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-red-500 animate-ping" />
+                  )}
+                  {/* Hint SPACE key */}
+                  {!listening && (
+                    <span className="absolute -bottom-4 text-[7px] font-mono text-zinc-600 tracking-widest pointer-events-none">SPACE</span>
                   )}
                 </button>
 
@@ -812,8 +1052,9 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
             ) : (
               /* Mode Keyboard Aktif: Full Command Bar dengan Animasi Slide Kompak */
               <div
-                className={`w-full flex items-center gap-2 rounded-full border-[1.5px] bg-black/90 backdrop-blur-2xl px-3 py-1.5 transition-all duration-300 shadow-[0_0_25px_rgba(245,158,11,0.2)] ${listening ? "border-red-500/80" : "border-amber-500/80"
+                className={`w-full flex items-center gap-2 rounded-full border-[1.5px] bg-black/90 backdrop-blur-2xl px-3 py-1.5 transition-all duration-300 shadow-[0_0_25px_rgba(245,158,11,0.2)] ${listening ? "border-red-500/80" : ""
                   }`}
+                style={!listening ? { borderColor: agentThemeHex + "cc" } : undefined}
               >
                 {/* TTS Button di dalam bar */}
                 <button
@@ -834,10 +1075,10 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
                 {/* Voice Button di dalam bar */}
                 <button
-                  onClick={startVoice}
+                  onClick={listening ? stopVoice : startVoice}
                   className={`size-8 shrink-0 rounded-full flex items-center justify-center transition-all ${listening ? "text-red-400 bg-red-400/20" : "text-zinc-400 hover:text-amber-400"
                     }`}
-                  title="Voice input"
+                  title={listening ? "Berhenti" : "Voice input"}
                 >
                   <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
@@ -909,10 +1150,27 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
       <div className="rounded-xl border border-amber-400/25 bg-black/50 backdrop-blur-sm flex flex-col h-[600px] hidden lg:flex">
         <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/5">
-          <span className="text-[9px] font-mono font-bold tracking-[0.2em] text-amber-400 leading-relaxed">
-            KEEMES //<br />TERMINAL_FEED
+          <span className="text-[9px] font-mono font-bold tracking-[0.2em] leading-relaxed" style={{ color: agentThemeHex }}>
+            {agentDisplayName} //<br />TERMINAL_FEED
           </span>
-          <span className="text-[8px] font-mono text-zinc-500 border border-white/10 px-1.5 py-0.5">LIVE_LOGS</span>
+          <div className="flex items-center gap-1.5">
+            <span
+              className="size-1.5 rounded-full animate-pulse"
+              style={{ backgroundColor: agentThemeHex }}
+            />
+            <span className="text-[8px] font-mono text-zinc-500 border border-white/10 px-1.5 py-0.5">LIVE_LOGS</span>
+            {/* Local agent pill di terminal header */}
+            <span
+              className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border"
+              style={localAgentOnline
+                ? { borderColor: "#22c55e50", color: "#22c55e", backgroundColor: "#22c55e10" }
+                : { borderColor: "#3f3f4650", color: "#71717a", backgroundColor: "transparent" }
+              }
+              title={localAgentOnline ? "Local Agent online" : "Local Agent offline"}
+            >
+              {localAgentOnline ? "🖥 LOCAL_ON" : "LOCAL_OFF"}
+            </span>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {feed.length === 0 && <p className="text-[9px] font-mono text-zinc-600">Menunggu perintah operator...</p>}
@@ -920,10 +1178,10 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
             <div key={m.id} className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-2">
               <div className="flex items-center justify-between mb-1">
                 <span
-                  className={`text-[8px] font-mono font-bold tracking-[0.15em] uppercase ${m.role === "user" ? "text-amber-400" : m.role === "agent" ? "text-emerald-400" : "text-cyan-300/70"
+                  className={`text-[8px] font-mono font-bold tracking-[0.15em] uppercase ${m.role === "user" ? "text-amber-400" : m.role === "agent" ? "text-emerald-400" : m.role === "sys" ? "text-sky-400" : "text-cyan-300/70"
                     }`}
                 >
-                  {m.role === "user" ? "KEENAN" : m.role === "agent" ? "KEETECH_AI" : m.role.toUpperCase()}
+                  {m.role === "user" ? "KEENAN" : m.role === "agent" ? agentDisplayName : m.role === "sys" ? "SYSTEM" : m.role.toUpperCase()}
                 </span>
                 <span className="text-[8px] font-mono text-zinc-600">
                   {new Date(m.ts).toLocaleTimeString("id-ID", { hour12: false })}

@@ -5,6 +5,11 @@ import { logActivity } from "@/lib/activity-log";
 import { loadModelSettings } from "@/lib/model-settings";
 import { callDirectLlm } from "@/lib/llm-direct";
 import { agents } from "@/lib/agents";
+import {
+  isLocalAgentOnline,
+  enqueueCommand,
+  waitForResult,
+} from "@/lib/agent-queue";
 
 interface GatewayFrame {
   id?: number | string | null;
@@ -203,12 +208,108 @@ async function runHermesTask(opts: {
 
 export const dynamic = "force-dynamic";
 
+// ---------------------------------------------------------------------------
+// Local Agent: deteksi apakah task adalah perintah aksi lokal di laptop
+// ---------------------------------------------------------------------------
+
+interface LocalAction {
+  action: "shell" | "open_app" | "close_app" | "screenshot" | "system_info" | "notify";
+  params: Record<string, unknown>;
+  label: string;
+}
+
+/**
+ * Coba parse teks user jadi local action.
+ * Pola sederhana — cocok untuk perintah voice natural bahasa Indonesia & EN.
+ * Mengembalikan null jika bukan perintah lokal.
+ */
+function parseLocalAction(text: string): LocalAction | null {
+  const t = text.trim().toLowerCase();
+
+  // Screenshot
+  if (/screenshot|tangkap layar|capture screen|ambil gambar layar|screen shot/.test(t)) {
+    return { action: "screenshot", params: {}, label: "screenshot layar" };
+  }
+
+  // System info — toleran variasi transkripsi
+  if (/info\s*(sistem|laptop|komputer|cpu|ram|memory|disk|mesin)|system\s*info|cek\s*resource|berapa\s*(ram|cpu|memory|memori)|spesifikasi|spec\s*laptop/.test(t)) {
+    return { action: "system_info", params: {}, label: "cek info sistem" };
+  }
+
+  // Buka / open aplikasi — lebih toleran spasi dan variasi
+  // Tangkap: "buka chrome", "open chrome", "buka aplikasi chrome",
+  //          "bukahin chrome", "cobain buka chrome", "tolong buka whatsapp"
+  const openMatch = t.match(
+    /(?:tolong\s+)?(?:buka(?:in|kan)?|open|jalankan|launch|aktifkan|nyalain|start)\s+(?:aplikasi\s+|app\s+)?([a-z][a-z0-9\s\-\.]{1,40}?)(?:\s*$|\.app|\s+dong|\s+sekarang|\s+ya|\s+please)/i
+  );
+  if (openMatch) {
+    const appName = openMatch[1].trim();
+    // Jangan salah tangkap perintah LLM
+    const llmKeywords = /^(?:code|program|skrip|script|fungsi|function|api|web|buat|create|tulis|write|sebuah|sebuah|halaman|website)/;
+    if (appName.length >= 2 && !llmKeywords.test(appName)) {
+      return {
+        action: "open_app",
+        params: { app: appName },
+        label: `buka ${appName}`,
+      };
+    }
+  }
+
+  // Tutup / quit aplikasi
+  // Tangkap: "tutup chrome", "close whatsapp", "quit spotify",
+  //          "tutup aplikasi chrome", "matiin chrome", "tolong tutup wa"
+  const closeMatch = t.match(
+    /(?:tolong\s+)?(?:tutup(?:in|kan)?|close|quit|keluar\s+dari|matiin|stop|hentikan|kill)\s+(?:aplikasi\s+|app\s+)?([a-z][a-z0-9\s\-\.]{1,40}?)(?:\s*$|\.app|\s+dong|\s+sekarang|\s+ya|\s+please)/i
+  );
+  if (closeMatch) {
+    const appName = closeMatch[1].trim();
+    const llmKeywords = /^(?:code|program|skrip|script|fungsi|function|api|web|buat|server|proses)/;
+    if (appName.length >= 2 && !llmKeywords.test(appName)) {
+      return {
+        action: "close_app",
+        params: { app: appName },
+        label: `tutup ${appName}`,
+      };
+    }
+  }
+
+  // Notifikasi desktop
+  const notifMatch = t.match(
+    /(?:kirim|tampilkan|buat|kasih)\s+(?:notifikasi|notif|notification|peringatan)\s+(?:dengan\s+(?:pesan|isi)\s+)?["']?(.+?)["']?\s*$/i
+  );
+  if (notifMatch) {
+    return {
+      action: "notify",
+      params: { message: notifMatch[1].trim() },
+      label: `notifikasi: ${notifMatch[1].trim().slice(0, 40)}`,
+    };
+  }
+
+  // Shell command eksplisit
+  const shellMatch = t.match(
+    /(?:jalankan|run|eksekusi|execute)\s+(?:di\s+terminal\s+)?(?:command\s+|perintah\s+)?["'`](.+?)["'`]/i
+  );
+  if (shellMatch) {
+    return {
+      action: "shell",
+      params: { command: shellMatch[1].trim() },
+      label: `shell: ${shellMatch[1].trim().slice(0, 50)}`,
+    };
+  }
+
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}) as Record<string, unknown>);
   const profile = String(body.profile || process.env.HERMES_DEFAULT_PROFILE || "devbot");
   const task = String(body.task || "");
   const agentId = String(body.agentId || profile);
   const agentName = String(body.agentName || profile);
+  // Alternatif transkripsi voice — dikirim client saat input dari mic
+  const voiceAlternatives: string[] = Array.isArray(body.voiceAlternatives)
+    ? (body.voiceAlternatives as unknown[]).map(String).slice(0, 5)
+    : [];
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -254,6 +355,51 @@ export async function POST(req: NextRequest) {
       let output = "";
       const agentMeta = agents.find((a) => a.id === agentId);
       const modelSettings = loadModelSettings();
+
+      // -----------------------------------------------------------------------
+      // Local Agent shortcut — kalau task adalah aksi lokal & agent online
+      // Coba task utama dulu, lalu semua voice alternatives
+      // -----------------------------------------------------------------------
+      const allCandidates = [task, ...voiceAlternatives.filter(v => v !== task)];
+      let localAction: LocalAction | null = null;
+      for (const candidate of allCandidates) {
+        localAction = parseLocalAction(candidate);
+        if (localAction) break;
+      }
+      if (localAction && isLocalAgentOnline()) {
+        try {
+          send("event", { type: "info", text: `🖥️ Local agent: ${localAction.label}...` });
+          logActivity({ agentId, agentName, type: "tool", text: `local: ${localAction.label}` });
+
+          const cmd = enqueueCommand({
+            action: localAction.action,
+            params: localAction.params,
+            requestedBy: agentId,
+          });
+
+          // Tunggu Python agent eksekusi (timeout 60s)
+          const result = await waitForResult(cmd.id);
+          const resultText = result.result || result.error || "Selesai tanpa output.";
+
+          logActivity({ agentId, agentName, type: "tool", text: `local selesai: ${resultText.slice(0, 80)}` });
+          send("complete", {
+            output: resultText,
+            sessionId: "",
+            events: [`[local:${localAction.action}] ${resultText.slice(0, 120)}`],
+            via: `local:${localAction.action}`,
+          });
+          closed = true;
+          clearInterval(heartbeat);
+          try { controller.close(); } catch { /* noop */ }
+          return;
+        } catch (err: any) {
+          // Local agent timeout atau error — fallback ke LLM normal
+          send("event", {
+            type: "info",
+            text: `Local agent gagal (${err?.message || "timeout"}) — tanya ke AI...`,
+          });
+        }
+      }
 
       const runWithHermes = async (profileOverride?: string) => {
         const useProfile = profileOverride || profile;

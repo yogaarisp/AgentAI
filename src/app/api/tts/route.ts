@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json" },
     });
   }
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || "JBFqnCBsd6RMkjVDRZzb";
+  const voiceId = String(body.voiceId || "").trim() || (process.env.ELEVENLABS_VOICE_ID || "JBFqnCBsd6RMkjVDRZzb");
 
   try {
     const upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
@@ -37,6 +37,12 @@ export async function POST(req: NextRequest) {
         text,
         model_id: "eleven_multilingual_v2",
         output_format: "mp3_44100_64",
+        voice_settings: {
+          stability: 0.55,        // cukup stabil tapi tetap expressive
+          similarity_boost: 0.80, // tetap mirip karakter voice aslinya
+          style: 0.25,            // sedikit gaya, tidak flat
+          use_speaker_boost: true,
+        },
       }),
       cache: "no-store",
     });
