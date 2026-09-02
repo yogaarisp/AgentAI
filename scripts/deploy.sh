@@ -13,7 +13,7 @@ echo "==> git pull"
 git pull origin main
 
 echo "==> install deps"
-npm ci
+npm install
 
 echo "==> build"
 npm run build
