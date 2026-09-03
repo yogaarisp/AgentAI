@@ -56,14 +56,13 @@ const JARVIS_VOICE_HINTS = [
   "Grandpa",  // macOS US English male
   "Jester",   // macOS US English male
   "Zarvox",   // macOS male-ish
-  // Google / Windows
+  // Google / Windows — SEMUA pria. "Google US English" DIHAPUS: itu voice perempuan!
   "Google UK English Male",
   "Microsoft Ryan",
   "Microsoft George",
   "Microsoft Guy",
   "Arthur",
   "Oliver",
-  "Google US English",
 ];
 
 /**
@@ -106,8 +105,10 @@ function pickJarvisVoice(): SpeechSynthesisVoice | null {
   );
   if (maleFallback) return maleFallback;
 
-  // 3. Last resort: voice EN apapun (lebih baik salah gender daripada silent)
-  return voices.find((v) => v.lang.toLowerCase().startsWith("en")) ?? voices[0];
+  // 3. Last resort: voice EN apapun yang bukan perempuan — kalau tak ada juga,
+  //    lebih baik TANPA suara daripada suara cewek menyerupai Jarvis.
+  const anyEnglish = voices.find((v) => v.lang.toLowerCase().startsWith("en"));
+  return anyEnglish && !isFemaleVoice(anyEnglish) ? anyEnglish : null;
 }
 
 function cleanForSpeech(text: string): string {
