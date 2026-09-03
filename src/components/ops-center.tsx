@@ -690,7 +690,8 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         feedRef.current[streamIndexRef.current] = { ...feedRef.current[streamIndexRef.current], text: t };
         setFeed([...feedRef.current]);
       }
-      if (ttsOnRef.current) speak(t, activeAgent?.elevenlabsVoiceId);
+      // Voice cowok default (server default: George) — tanpa voice per-agent agar konsisten.
+      if (ttsOnRef.current) speak(t);
     };
 
     try {
