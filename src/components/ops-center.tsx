@@ -415,6 +415,10 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const [isThinking, setIsThinking] = useState(false);
   const [streamingStarted, setStreamingStarted] = useState(false);
   const [listening, setListening] = useState(false);
+  // Mic sticky: sekali aktif tetap menyala sampai user klik lagi (atau Space).
+  // Saat TTS berbunyi mic di-pause, lalu auto-resume setelah jawaban selesai.
+  const micStickyRef = useRef(false);
+  const ttsSpeakingRef = useRef(false);
   const [clarifyDraft, setClarifyDraft] = useState<Record<string, string>>({});
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [env, setEnv] = useState<{ location: string; weather: string } | null>(null);
@@ -428,7 +432,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   const ttsOnRef = useRef(true);
   const introSpokenRef = useRef(false);
   // Refs untuk akses startVoice/stopVoice dari useEffect tanpa stale closure
-  const startVoiceRef = useRef<(() => void) | null>(null);
+  const startVoiceRef = useRef<((sticky?: boolean) => void) | null>(null);
   const stopVoiceRef  = useRef<(() => void) | null>(null);
   const recRef = useRef<any>(null); // instance SpeechRecognition aktif
 
@@ -691,7 +695,16 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
         setFeed([...feedRef.current]);
       }
       // Voice cowok default (server default: George) — tanpa voice per-agent agar konsisten.
-      if (ttsOnRef.current) speak(t);
+      if (ttsOnRef.current) {
+        ttsSpeakingRef.current = true;
+        void speak(t).finally(() => {
+          ttsSpeakingRef.current = false;
+          // Sticky mic: resume mendengarkan setelah TTS selesai.
+          if (micStickyRef.current && !recRef.current) {
+            try { startVoiceRef.current?.(false); } catch { /* ignore */ }
+          }
+        });
+      }
     };
 
     try {
@@ -769,10 +782,15 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
     }
   };
 
-  const startVoice = () => {
+  const startVoice = (sticky = true) => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
       pushFeed([{ role: "event", text: "Voice input tidak didukung browser ini. Gunakan Chrome." }]);
+      return;
+    }
+    if (sticky) micStickyRef.current = true;
+    if (ttsSpeakingRef.current) {
+      // TTS sedang berbunyi — jangan pancing mic sekarang; onend TTS akan resume.
       return;
     }
     const rec = new SR();
@@ -791,6 +809,15 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
       console.log("[Voice] Mic berhenti.");
       setListening(false);
       recRef.current = null;
+      // Sticky: kalau mic masih diminta aktif dan TTS tidak sedang bunyi,
+      // re-arm otomatis (SpeechRecognition berhenti setiap satu kalimat terkirim).
+      if (micStickyRef.current && !ttsSpeakingRef.current) {
+        setTimeout(() => {
+          if (micStickyRef.current && !ttsSpeakingRef.current && !recRef.current) {
+            try { startVoiceRef.current?.(false); } catch { /* ignore */ }
+          }
+        }, 350);
+      }
     };
 
     rec.onspeechstart = () => console.log("[Voice] Suara terdeteksi...");
@@ -836,6 +863,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
   };
 
   const stopVoice = () => {
+    micStickyRef.current = false;
     try {
       recRef.current?.stop();
     } catch { /* ignore */ }
@@ -1015,7 +1043,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
                 {/* Button 2: Voice Input (Microphone with Stand) */}
                 <button
-                  onClick={listening ? stopVoice : startVoice}
+                  onClick={() => (listening ? stopVoice() : startVoice())}
                   className={`relative size-9 rounded-full border-[1.5px] flex items-center justify-center transition-all ${listening
                       ? "border-red-500 bg-red-500/25 text-red-400 animate-pulse shadow-[0_0_16px_rgba(239,68,68,0.5)]"
                       : "border-amber-500/80 bg-amber-950/40 text-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.25)] hover:bg-amber-500/20 hover:scale-105"
@@ -1076,7 +1104,7 @@ export default function OpsCenter({ agents }: { agents: Agent[] }) {
 
                 {/* Voice Button di dalam bar */}
                 <button
-                  onClick={listening ? stopVoice : startVoice}
+                  onClick={() => (listening ? stopVoice() : startVoice())}
                   className={`size-8 shrink-0 rounded-full flex items-center justify-center transition-all ${listening ? "text-red-400 bg-red-400/20" : "text-zinc-400 hover:text-amber-400"
                     }`}
                   title={listening ? "Berhenti" : "Voice input"}
