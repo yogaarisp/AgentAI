@@ -18,11 +18,23 @@ npm install
 echo "==> build"
 npm run build
 
-echo "==> restart app"
+echo "==> restart app (port 3001)"
 if command -v pm2 >/dev/null 2>&1; then
-  pm2 restart hermes-dashboard || pm2 start npm --name hermes-dashboard -- start
+  # Hapus duplikat lama dengan nama berbeda, sisakan satu proses resmi.
+  pm2 delete hermes-dashboard >/dev/null 2>&1 || true
+  pm2 restart agent-keetech >/dev/null 2>&1 || \
+    pm2 start npm --name agent-keetech -- start || true
+  pm2 save
 else
   echo "!! pm2 tidak ditemukan — restart manual lewat aaPanel (Node Project)."
+fi
+
+echo "==> verifikasi port 3001"
+sleep 2
+if curl -s -o /dev/null --max-time 10 http://localhost:3001/; then
+  echo "==> OK: aplikasi merespons di http://localhost:3001"
+else
+  echo "!! WARNING: belum ada respons di port 3001 — cek: pm2 logs agent-keetech"
 fi
 
 # Opsional: purge semua cache Cloudflare (butuh Zone ID + API Token dengan izin Cache Purge)
