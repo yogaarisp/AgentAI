@@ -66,8 +66,7 @@ const JARVIS_VOICE_HINTS = [
   "Google US English",
 ];
 
-/** Voice Bahasa Indonesia — prioritas pria agar karakter tetap "Jarvis". */
-const ID_VOICE_HINTS = ["Ardi", "Andika", "Google Bahasa Indonesia", "Indonesian"];
+/** Voice Bahasa Indonesia — TIDAK dipakai lagi demi konsistensi karakter. */
 
 function getVoices(): SpeechSynthesisVoice[] {
   return "speechSynthesis" in window ? window.speechSynthesis.getVoices() : [];
@@ -104,16 +103,6 @@ function pickJarvisVoice(): SpeechSynthesisVoice | null {
   return voices.find((v) => v.lang.toLowerCase().startsWith("en")) ?? voices[0];
 }
 
-function pickIdVoice(): SpeechSynthesisVoice | null {
-  const voices = getVoices();
-  if (!voices.length) return null;
-  for (const hint of ID_VOICE_HINTS) {
-    const v = voices.find((x) => x.name.includes(hint));
-    if (v) return v;
-  }
-  return voices.find((v) => v.lang.toLowerCase().startsWith("id")) ?? null;
-}
-
 function cleanForSpeech(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, " (blok kode dilewati). ")
@@ -123,14 +112,6 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
-/** Kata kunci penanda Bahasa Indonesia. */
-const ID_WORD =
-  /(^|\s)(yang|dan|adalah|tidak|sudah|akan|bisa|untuk|dengan|kami|saya|anda|juga|pada|atau|ini|itu|telah|harus|kok|jangan|banyak|karena|kalau|jika|semua|belum|masih|dari)([\s.,!?]|$)/i;
-
-function detectLang(sentence: string): "id" | "en" {
-  return ID_WORD.test(sentence) ? "id" : "en";
-}
-
 /** Pecah jadi kalimat — tanpa regex lookbehind (kompatibel Safari lama). */
 function splitSentences(text: string): string[] {
   return (text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [text])
@@ -138,28 +119,24 @@ function splitSentences(text: string): string[] {
     .filter(Boolean);
 }
 
-/** Fallback: speechSynthesis browser, bilingual per-kalimat. */
 function speakBrowser(text: string) {
   if (!("speechSynthesis" in window)) return;
   const synth = window.speechSynthesis;
   synth.cancel();
   const jarvis = pickJarvisVoice();
-  const idVoice = pickIdVoice();
   const sentences = splitSentences(text).slice(0, 40);
   if (!sentences.length) return;
 
   for (const sentence of sentences) {
-    const isId = detectLang(sentence) === "id";
-    const voice = isId ? idVoice ?? jarvis : jarvis;
     const utter = new SpeechSynthesisUtterance(sentence);
-    if (voice) {
-      utter.voice = voice;
-      utter.lang = voice.lang;
+    if (jarvis) {
+      utter.voice = jarvis;
+      utter.lang = jarvis.lang;
     } else {
-      utter.lang = isId ? "id-ID" : "en-US";
+      utter.lang = "en-GB";
     }
     utter.rate = 1.02;
-    utter.pitch = 0.75;  // lebih rendah = lebih pria, seperti Jarvis
+    utter.pitch = 0.75; // lebih rendah = lebih pria, seperti Jarvis
     synth.speak(utter);
   }
 }
@@ -189,10 +166,21 @@ async function speakElevenLabs(text: string, voiceId?: string): Promise<boolean>
   }
 }
 
+/** Sticky fallback: begitu ElevenLabs gagal (quota/gangguan), jangan coba lagi
+ *  sampai halaman di-reload — mencegah suara George/browser bolak-balik. */
+let elevenLabsOutage = false;
+
 export async function speak(text: string, voiceId?: string) {
   const clean = cleanForSpeech(text).slice(0, 900);
   if (!clean) return;
   stopSpeaking();
-  const ok = await speakElevenLabs(clean, voiceId);
-  if (!ok) speakBrowser(clean);
+  if (!elevenLabsOutage) {
+    const ok = await speakElevenLabs(clean, voiceId);
+    if (ok) return;
+    elevenLabsOutage = true;
+    console.info(
+      "[tts] ElevenLabs tidak tersedia (quota/gagal) — suara lanjut pakai voice browser (Jarvis) sampai halaman di-reload."
+    );
+  }
+  speakBrowser(clean);
 }
